@@ -8977,10 +8977,8 @@ void Bot_ExecutePerfectBlocking(bot_state_t* bs) {
 		}*/ // Niksata Edit
 
 		// Stop moving for maximum block stability
-		trap->EA_MoveRight(bs->client, 0);
-		trap->EA_MoveLeft(bs->client, 0);
-		trap->EA_MoveForward(bs->client, 0);
-		trap->EA_MoveBack(bs->client, 0);
+		vec3_t stopMove = { 0.0f, 0.0f, 0.0f };
+		trap->EA_Move(bs->client, stopMove, 0.0f);
 
 		// Calculate optimal block angle
 		vec3_t toEnemy, right, forward;
