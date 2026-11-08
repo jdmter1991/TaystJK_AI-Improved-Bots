@@ -451,7 +451,7 @@ jobs:
 
   generate-release-body:
     name: Generate Release Body
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/TaystJK_AI' || github.ref == 'refs/heads/beta')
     runs-on: ubuntu-22.04
     outputs:
       release_body: ${{ steps.generate.outputs.release_body }}
@@ -502,8 +502,8 @@ jobs:
           echo "$EOF" >> $GITHUB_OUTPUT
 
   create-latest:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [msvc, ubuntu]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/TaystJK_AI'
+    needs: [msvc, ubuntu, generate-release-body]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -601,7 +601,7 @@ jobs:
 
   create-release:
     if: github.event_name == 'release'
-    needs: [msvc, ubuntu]
+    needs: [msvc, ubuntu, generate-release-body]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
