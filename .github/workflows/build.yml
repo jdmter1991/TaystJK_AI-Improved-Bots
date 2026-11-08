@@ -503,7 +503,7 @@ jobs:
 
   create-latest:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [msvc, ubuntu, generate-release-body]
+    needs: [msvc, ubuntu]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -601,7 +601,7 @@ jobs:
 
   create-release:
     if: github.event_name == 'release'
-    needs: [msvc, ubuntu, generate-release-body]
+    needs: [msvc, ubuntu]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
