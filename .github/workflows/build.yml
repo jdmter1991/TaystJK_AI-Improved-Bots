@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - master
+      - TaystJK_AI
       - beta
     paths-ignore:
       - "**.md"
@@ -12,7 +12,7 @@ on:
       - "docs/*"
   pull_request:
     branches:
-      - master
+      - TaystJK_AI
       - beta
     paths-ignore:
       - "**.md"
@@ -449,13 +449,13 @@ jobs:
           path: universal2-app/JediAcademy/TaystJK-macos-universal2-Release-Portable.tar.gz
           if-no-files-found: error
 
-  generate-release-body:
-    name: Generate Release Body
-     if: |
+generate-release-body:
+  name: Generate Release Body
+  if: |
     (github.event_name == 'push' &&
     (github.ref == 'refs/heads/TaystJK_AI' || github.ref == 'refs/heads/beta')) ||
     github.event_name == 'release'
-    runs-on: ubuntu-22.04
+  runs-on: ubuntu-22.04
     outputs:
       release_body: ${{ steps.generate.outputs.release_body }}
     steps:
@@ -557,7 +557,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh workflow run reference-check.yml --repo ${{ github.repository }} \
-            --ref master -f release_tag=latest-build
+            --ref TaystJK_AI -f release_tag=latest-build
 
   create-prerelease:
     if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
