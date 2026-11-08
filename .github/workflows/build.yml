@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - TaystJK_AI
+      - master
       - beta
     paths-ignore:
       - "**.md"
@@ -12,7 +12,7 @@ on:
       - "docs/*"
   pull_request:
     branches:
-      - TaystJK_AI
+      - master
       - beta
     paths-ignore:
       - "**.md"
@@ -449,13 +449,10 @@ jobs:
           path: universal2-app/JediAcademy/TaystJK-macos-universal2-Release-Portable.tar.gz
           if-no-files-found: error
 
-generate-release-body:
-  name: Generate Release Body
-  if: |
-    (github.event_name == 'push' &&
-    (github.ref == 'refs/heads/TaystJK_AI' || github.ref == 'refs/heads/beta')) ||
-    github.event_name == 'release'
-  runs-on: ubuntu-22.04
+  generate-release-body:
+    name: Generate Release Body
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta')
+    runs-on: ubuntu-22.04
     outputs:
       release_body: ${{ steps.generate.outputs.release_body }}
     steps:
@@ -505,7 +502,7 @@ generate-release-body:
           echo "$EOF" >> $GITHUB_OUTPUT
 
   create-latest:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/TaystJK_AI'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: [msvc, ubuntu, generate-release-body]
     runs-on: ubuntu-22.04
     permissions:
@@ -557,7 +554,7 @@ generate-release-body:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh workflow run reference-check.yml --repo ${{ github.repository }} \
-            --ref TaystJK_AI -f release_tag=latest-build
+            --ref master -f release_tag=latest-build
 
   create-prerelease:
     if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
