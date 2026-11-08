@@ -130,7 +130,7 @@ NET
 
 #define	PORT_ANY			-1
 
-#define	MAX_RELIABLE_COMMANDS	512			// max string commands buffered for restransmit // Niksata Edit
+#define	MAX_RELIABLE_COMMANDS	256			// max string commands buffered for restransmit // Niksata Edit
 
 typedef enum {
 	NS_CLIENT,
