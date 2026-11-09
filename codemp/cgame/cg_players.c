@@ -8911,8 +8911,14 @@ void CG_DoSFXSaberMcquarrie(vec3_t blade_muz, vec3_t blade_tip, vec3_t trail_tip
 	//pulse = Q_fabs(sinf((float)cg.time / 25.0f)) * 0.25f; // Niksata Edit
 
 	//effectradius = ((radius * 1.6f * v1) + Q_flrand(-1.0f, 1.0f) * 0.1f) * radiusmult * cg_SFXSabersGlowSize.value; // Niksata Edit original value
-	coreradius = (radiusStart + Q_flrand(-1.0f, 1.0f) * radiusRange) * radiusmult * cg_SFXSabersCoreSizeMcquarrie.value; // Niksata Edit original value
-
+	if (color == SABER_BLACK) // Niksata Edit
+	{
+		coreradius = (radiusStart + Q_flrand(-1.0f, 1.0f) * radiusRange) * radiusmult * cg_SFXSabersCoreSizeOT.value; // Niksata Edit original value
+	}
+	else
+	{
+		coreradius = (radiusStart + Q_flrand(-1.0f, 1.0f) * radiusRange) * radiusmult * cg_SFXSabersCoreSizeMcquarrie.value; // Niksata Edit original value
+	} // Niksata Edit
 	//coreradius = ((radius * 0.4 * v2) + Q_flrand(-1.0f, 1.0f) * 0.1f) * radiusmult; // Niksata Edit ep3
 	//effectradius = ((radius * 1.6) + 1.5 * 0.1f) * radiusmult; // Remove v1 for even glow
 	radiusmult = 1.0f;
@@ -8925,8 +8931,14 @@ void CG_DoSFXSaberMcquarrie(vec3_t blade_muz, vec3_t blade_tip, vec3_t trail_tip
 	}
 	effectradius = (radius + Q_flrand(-1.0f, 1.0f) * radiusRange) * radiusmult; // Niksata Edit ot
 	//effectradius *= /*0.70f*/ 0.65f; // Niksata Edit ep3
-	effectradius *= cg_SFXSabersGlowSizeMcquarrie.value; // Niksata Edit ot
-
+	if (color == SABER_BLACK) // Niksata Edit
+	{
+		effectradius *= cg_SFXSabersGlowSizeOT.value; // Niksata Edit ot
+	}
+	else
+	{
+		effectradius *= cg_SFXSabersGlowSizeMcquarrie.value; // Niksata Edit ot
+	} // Niksata Edit
 	//float ignite_len, ignite_radius;
 	//ignite_len = lengthMax * 0.25f;
 	//ignite_radius = effectradius * effectradius * 1.5f;
