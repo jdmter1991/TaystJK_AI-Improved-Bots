@@ -417,17 +417,16 @@ XCVAR_DEF( ui_tm2_c5_cnt,						"0",					NULL,					CVAR_ROM|CVAR_INTERNAL )
 XCVAR_DEF( ui_tm2_cnt,							"0",					NULL,					CVAR_ROM|CVAR_INTERNAL )
 XCVAR_DEF( ui_tm3_cnt,							"0",					NULL,					CVAR_ROM|CVAR_INTERNAL )
 XCVAR_DEF( cg_SFXSabers,						"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
-XCVAR_DEF( cg_SFXSabersGlowSize,				"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersGlowSizeTPM,				"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
-XCVAR_DEF( cg_SFXSabersGlowSizeAhsoka,			"1.1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
+XCVAR_DEF( cg_SFXSabersGlowSizeROTS,			"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersGlowSizeOT,				"1.6",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersGlowSizeMcquarrie,		"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
-XCVAR_DEF( cg_SFXSabersCoreSize,				"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
+XCVAR_DEF( cg_SFXSabersGlowSizeAhsoka,			"1.1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersCoreSizeTPM,				"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
-XCVAR_DEF( cg_SFXSabersCoreSizeAhsoka,			"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
+XCVAR_DEF( cg_SFXSabersCoreSizeROTS,			"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersCoreSizeOT,				"1.1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersCoreSizeMcquarrie,		"2",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
-XCVAR_DEF( cg_SFXSabersTPMCore,					"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
+XCVAR_DEF( cg_SFXSabersCoreSizeAhsoka,			"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_SFXSabersOTrestored,				"1",					NULL,					CVAR_ARCHIVE ) // Niksata Edit
 XCVAR_DEF( cg_disruptorMainTime,				"150",					NULL,					CVAR_ARCHIVE )	//from smod
 XCVAR_DEF( cg_disruptorAltTime,					"175",					NULL,					CVAR_ARCHIVE )	//from smod
