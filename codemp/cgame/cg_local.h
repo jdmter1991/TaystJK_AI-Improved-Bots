@@ -1619,16 +1619,20 @@ typedef struct cgMedia_s {
 	// Saber shaders ROTS/TPM // Niksata Edit
 //-----------------------------
 	qhandle_t	redSaberGlowShaderROTS;
+	qhandle_t	redSaberGlowShaderROTSBluray;
 	qhandle_t	redSaberGlowShaderTPM4k; // Niksata Edit
 	qhandle_t	orangeSaberGlowShaderROTS;
 	qhandle_t	orangeSaberGlowShaderTPM4k; // Niksata Edit
 	qhandle_t	yellowSaberGlowShaderROTS;
 	qhandle_t	yellowSaberGlowShaderTPM4k; // Niksata Edit
 	qhandle_t	greenSaberGlowShaderROTS;
+	qhandle_t	greenSaberGlowShaderROTSBluray;
 	qhandle_t	greenSaberGlowShaderTPM4k; // Niksata Edit
 	qhandle_t	blueSaberGlowShaderROTS;
+	qhandle_t	blueSaberGlowShaderROTSBluray;
 	qhandle_t	blueSaberGlowShaderTPM4k; // Niksata Edit
 	qhandle_t	purpleSaberGlowShaderROTS;
+	qhandle_t	purpleSaberGlowShaderROTSBluray;
 	qhandle_t	purpleSaberGlowShaderTPM4k; // Niksata Edit
 
 	//rgb

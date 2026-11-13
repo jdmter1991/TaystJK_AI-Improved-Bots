@@ -6290,7 +6290,12 @@ static void CG_RGBForSaberColorROTS(saber_colors_t color, vec3_t rgb, int cnum, 
 	switch (color)
 	{
 	case SABER_RED:
-		VectorSet(rgb, 0.486f, 0.094f, 0.098f);  // 7c1819 - ROTS 4k red
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			VectorSet(rgb, 0.616f, 0.086f, 0.114f);  // 9d161d - EP3
+		}
+		else {
+			VectorSet(rgb, 0.486f, 0.094f, 0.098f);  // 7c1819 - ROTS 4k red
+		}
 		break;
 	case SABER_ORANGE:
 		VectorSet(rgb, 0.969f, 0.549f, 0.008f);  // f78c02
@@ -6299,13 +6304,28 @@ static void CG_RGBForSaberColorROTS(saber_colors_t color, vec3_t rgb, int cnum, 
 		VectorSet(rgb, 0.808f, 0.667f, 0.000f);  // ceaa00
 		break;
 	case SABER_GREEN:
-		VectorSet(rgb, 0.184f, 0.569f, 0.086f);  // 2f9116 - ROTS 4k green
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			VectorSet(rgb, 0.161f, 0.565f, 0.082f);  // 299015 - EP3
+		}
+		else {
+			VectorSet(rgb, 0.184f, 0.569f, 0.086f);  // 2f9116 - ROTS 4k green
+		}
 		break;
 	case SABER_BLUE:
-		VectorSet(rgb, 0.137f, 0.278f, 0.976f);  // 2347f9  - ROTS 4k blue
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			VectorSet(rgb, 0.078f, 0.173f, 0.569f);  // 142c91 - EP3
+		}
+		else {
+			VectorSet(rgb, 0.137f, 0.278f, 0.976f);  // 2347f9  - ROTS 4k blue
+		}
 		break;
 	case SABER_PURPLE:
-		VectorSet(rgb, 0.565f, 0.204f, 0.976f);  // 9034f9 - ROTS 4k purple
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			VectorSet(rgb, 0.427f, 0.059f, 0.624f);  // 6d0f9f - EP3
+		}
+		else {
+			VectorSet(rgb, 0.565f, 0.204f, 0.976f);  // 9034f9 - ROTS 4k purple
+		}
 		break;
 	case SABER_BLACK:
 		VectorSet(rgb, 1.0f, 1.0f, 1.0f);
@@ -7820,8 +7840,14 @@ void CG_DoSFXSaberROTS(vec3_t blade_muz, vec3_t blade_tip, vec3_t trail_tip, vec
 
 	switch (color) {
 	case SABER_RED:
-		glow = cgs.media.redSaberGlowShaderROTS;
-		core = cgs.media.ShaderSaberBlade;
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			glow = cgs.media.redSaberGlowShaderROTSBluray; // ROTS Bluray
+			core = cgs.media.ShaderSaberBlade;
+		}
+		else {
+			glow = cgs.media.redSaberGlowShaderROTS; // ROTS 4k
+			core = cgs.media.ShaderSaberBlade;
+		}
 		break;
 	case SABER_ORANGE:
 		glow = cgs.media.orangeSaberGlowShaderROTS;
@@ -7832,12 +7858,24 @@ void CG_DoSFXSaberROTS(vec3_t blade_muz, vec3_t blade_tip, vec3_t trail_tip, vec
 		core = cgs.media.ShaderSaberBlade;
 		break;
 	case SABER_GREEN:
-		glow = cgs.media.greenSaberGlowShaderROTS;   // ROTS green glow (default)
-		core = cgs.media.ShaderSaberBlade;
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			glow = cgs.media.greenSaberGlowShaderROTSBluray; // ROTS Bluray
+			core = cgs.media.ShaderSaberBlade;
+		}
+		else {
+			glow = cgs.media.greenSaberGlowShaderROTS; // ROTS 4k
+			core = cgs.media.ShaderSaberBlade;
+		}
 		break;
 	case SABER_PURPLE:
-		glow = cgs.media.purpleSaberGlowShaderROTS;
-		core = cgs.media.ShaderSaberBlade;
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			glow = cgs.media.purpleSaberGlowShaderROTSBluray; // ROTS Bluray
+			core = cgs.media.ShaderSaberBlade;
+		}
+		else {
+			glow = cgs.media.purpleSaberGlowShaderROTS; // ROTS 4k
+			core = cgs.media.ShaderSaberBlade;
+		}
 		break;
 		//	case SABER_WHITE:
 	case SABER_RGB:
@@ -7872,8 +7910,14 @@ void CG_DoSFXSaberROTS(vec3_t blade_muz, vec3_t blade_tip, vec3_t trail_tip, vec
 		doLight = qfalse;
 		break;
 	default:
-		glow = cgs.media.blueSaberGlowShaderROTS;   // ROTS blue glow (default)
-		core = cgs.media.ShaderSaberBlade;
+		if (cg_SFXSabersROTSBluray.integer == 1) {
+			glow = cgs.media.blueSaberGlowShaderROTSBluray; // ROTS Bluray
+			core = cgs.media.ShaderSaberBlade;
+		}
+		else {
+			glow = cgs.media.blueSaberGlowShaderROTS; // ROTS 4k
+			core = cgs.media.ShaderSaberBlade;
+		}
 	}
 
 	VectorMA(blade_muz, blade_len * 0.5f, blade_dir, mid);

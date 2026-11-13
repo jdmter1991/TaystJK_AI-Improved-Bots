@@ -11,6 +11,19 @@ gfx/effects/sabers/red_glow_rots
 	}
 }
 
+gfx/effects/sabers/red_glow_rots_bluray
+{
+	nopicmip
+	notc
+	cull	twosided
+	{
+		map gfx/effects/sabers/red_glow_rots_bluray
+		blendFunc GL_ONE GL_ONE
+		glow
+		rgbGen vertex
+	}
+}
+
 gfx/effects/sabers/red_glow_tpm4k
 {
 	nopicmip
@@ -89,6 +102,19 @@ gfx/effects/sabers/green_glow_rots
 	}
 }
 
+gfx/effects/sabers/green_glow_rots_bluray
+{
+	nopicmip
+	notc
+	cull	twosided
+	{
+		map gfx/effects/sabers/green_glow_rots_bluray
+		blendFunc GL_ONE GL_ONE
+		glow
+		rgbGen vertex
+	}
+}
+
 gfx/effects/sabers/green_glow_tpm4k
 {
 	nopicmip
@@ -115,6 +141,19 @@ gfx/effects/sabers/blue_glow_rots
 	}
 }
 
+gfx/effects/sabers/blue_glow_rots_bluray
+{
+	nopicmip
+	notc
+	cull	twosided
+	{
+		map gfx/effects/sabers/blue_glow_rots_bluray
+		blendFunc GL_ONE GL_ONE
+		glow
+		rgbGen vertex
+	}
+}
+
 gfx/effects/sabers/blue_glow_tpm4k
 {
 	nopicmip
@@ -135,6 +174,19 @@ gfx/effects/sabers/purple_glow_rots
 	cull	twosided
 	{
 		map gfx/effects/sabers/purple_glow_rots
+		blendFunc GL_ONE GL_ONE
+		glow
+		rgbGen vertex
+	}
+}
+
+gfx/effects/sabers/purple_glow_rots_bluray
+{
+	nopicmip
+	notc
+	cull	twosided
+	{
+		map gfx/effects/sabers/purple_glow_rots_bluray
 		blendFunc GL_ONE GL_ONE
 		glow
 		rgbGen vertex

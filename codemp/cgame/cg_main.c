@@ -662,6 +662,7 @@ static void CG_RegisterSounds( void ) {
 
 	//sfx ROTS/TPM // Niksata Edit
 	cgs.media.redSaberGlowShaderROTS = trap->R_RegisterShader("gfx/effects/sabers/red_glow_rots");
+	cgs.media.redSaberGlowShaderROTSBluray = trap->R_RegisterShader("gfx/effects/sabers/red_glow_rots_bluray");
 	cgs.media.redSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/red_glow_tpm4k"); // Niksata Edit
 	cgs.media.orangeSaberGlowShaderROTS = trap->R_RegisterShader("gfx/effects/sabers/orange_glow_rots");
 	cgs.media.orangeSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/orange_glow_tpm4k"); // Niksata Edit
@@ -669,10 +670,13 @@ static void CG_RegisterSounds( void ) {
 	cgs.media.yellowSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/yellow_glow_tpm4k"); // Niksata Edit
 	cgs.media.greenSaberGlowShaderROTS = trap->R_RegisterShader("gfx/effects/sabers/green_glow_rots");
 	cgs.media.greenSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/green_glow_tpm4k"); // Niksata Edit
+	cgs.media.greenSaberGlowShaderROTSBluray = trap->R_RegisterShader("gfx/effects/sabers/green_glow_rots_bluray");
 	cgs.media.blueSaberGlowShaderROTS = trap->R_RegisterShader("gfx/effects/sabers/blue_glow_rots");
 	cgs.media.blueSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/blue_glow_tpm4k"); // Niksata Edit
+	cgs.media.blueSaberGlowShaderROTSBluray = trap->R_RegisterShader("gfx/effects/sabers/blue_glow_rots_bluray");
 	cgs.media.purpleSaberGlowShaderROTS = trap->R_RegisterShader("gfx/effects/sabers/purple_glow_rots");
 	cgs.media.purpleSaberGlowShaderTPM4k = trap->R_RegisterShader("gfx/effects/sabers/purple_glow_tpm4k"); // Niksata Edit
+	cgs.media.purpleSaberGlowShaderROTSBluray = trap->R_RegisterShader("gfx/effects/sabers/purple_glow_rots_bluray");
 
 	//rgb
 	cgs.media.rgbSaberGlowShader = trap->R_RegisterShader("gfx/effects/sabers/RGBglow1");
