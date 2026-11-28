@@ -73,10 +73,12 @@ extern comProfile_t com_prof;
 
 // counters of the job threads (index = job thread, 0 unused); merged into com_prof by the code that
 // started the parallel loop, once the loop has finished
-typedef struct comProfThread_s {
+// (each on its own cache lines: written on every trace and leaf, so neighbours must not share a line)
+typedef struct alignas( 64 ) comProfThread_s {
 	comProfCm_t	cm;
 	uint64_t	svTraces, svTraceNs, svWorldTraceNs;
 	uint64_t	svPointContents;
+	int			enabled;		// copy of com_prof.enabled for the loop (com_prof's line is written by the main thread)
 } comProfThread_t;
 extern comProfThread_t com_profThread[16];	// JOBS_MAX_THREADS
 

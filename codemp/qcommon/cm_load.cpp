@@ -79,8 +79,15 @@ cvar_t		*cm_subBSPTree;
 cvar_t		*cm_accelVerify;
 #endif
 
-// one temporary box per job thread (index 0 = main thread, the original layout)
-static cmodel_t	box_models[JOBS_MAX_THREADS];
+// one temporary box per job thread (index 0 = main thread, the original layout). Written on every
+// trace against a non-brush entity, so each thread's box sits on its own cache lines: the brushes
+// CM_BOX_BRUSH_STRIDE slots apart in the brush array, planes, sides and model in aligned storage.
+struct alignas( 64 ) cmBoxStore_t {
+	cmodel_t		model;
+	cplane_t		planes[BOX_PLANES];
+	cbrushside_t	sides[BOX_SIDES];
+};
+static cmBoxStore_t	box_store[JOBS_MAX_THREADS];
 static cplane_t	*box_planesT[JOBS_MAX_THREADS];
 static cbrush_t	*box_brushT[JOBS_MAX_THREADS];
 
@@ -274,7 +281,7 @@ void CMod_LoadBrushes( const lump_t *l, clipMap_t &cm ) {
 	}
 	count = l->filelen / sizeof(*in);
 
-	cm.brushes = (cbrush_t *)Hunk_Alloc( ( BOX_BRUSHES * JOBS_MAX_THREADS + count ) * sizeof( *cm.brushes ), h_high );
+	cm.brushes = (cbrush_t *)Hunk_Alloc( ( CM_BOX_BRUSH_SLOTS + count ) * sizeof( *cm.brushes ), h_high );
 	cm.numBrushes = count;
 
 	out = cm.brushes;
@@ -851,7 +858,7 @@ static cmStamp_t	*cm_threadStamps[JOBS_MAX_THREADS];	// [thread][1 + MAX_SUB_BSP
 static int			cm_threadStampThreads = 0;
 
 static bool CM_StampsMatch( const cmStamp_t *st, const clipMap_t *m ) {
-	return st->brushes == m->brushes && st->numBrushes == m->numBrushes + BOX_BRUSHES * JOBS_MAX_THREADS && st->numSurfaces == m->numSurfaces;
+	return st->brushes == m->brushes && st->numBrushes == m->numBrushes + CM_BOX_BRUSH_SLOTS && st->numSurfaces == m->numSurfaces;
 }
 
 void CM_ThreadScratchFree( void ) {
@@ -890,7 +897,7 @@ void CM_ThreadScratchEnsure( int threads ) {
 			const clipMap_t *map = m ? &SubBSP[m - 1] : &cmg;
 			cmStamp_t *st = &cm_threadStamps[t][m];
 			st->brushes = map->brushes;
-			st->numBrushes = map->numBrushes + BOX_BRUSHES * JOBS_MAX_THREADS;
+			st->numBrushes = map->numBrushes + CM_BOX_BRUSH_SLOTS;
 			st->numSurfaces = map->numSurfaces;
 			st->brush = (int *)Z_Malloc( st->numBrushes * sizeof( int ), TAG_GENERAL, qtrue );
 			st->surf = (int *)Z_Malloc( ( st->numSurfaces + 1 ) * sizeof( int ), TAG_GENERAL, qtrue );
@@ -952,7 +959,7 @@ cmodel_t	*CM_ClipHandleToModel( clipHandle_t handle, clipMap_t **clipMap ) {
 		{
 			*clipMap = &cmg;
 		}
-		return &box_models[Com_JobsThreadIndex()];
+		return &box_store[Com_JobsThreadIndex()].model;
 	}
 
 	count = cmg.numSubModels;
@@ -1038,13 +1045,14 @@ void CM_InitBoxHull (void)
 	cbrushside_t	*s;
 	cplane_t	*box_planes;
 	cbrush_t	*box_brush;
-	cmodel_t	&box_model = box_models[t];
+	cmodel_t	&box_model = box_store[t].model;
+	cbrushside_t	*box_sides = t ? box_store[t].sides : cmg.brushsides + cmg.numBrushSides;
 
-	box_planes = box_planesT[t] = &cmg.planes[cmg.numPlanes + t * BOX_PLANES];
+	box_planes = box_planesT[t] = t ? box_store[t].planes : &cmg.planes[cmg.numPlanes];
 
-	box_brush = box_brushT[t] = &cmg.brushes[cmg.numBrushes + t * BOX_BRUSHES];
+	box_brush = box_brushT[t] = &cmg.brushes[cmg.numBrushes + t * CM_BOX_BRUSH_STRIDE];
 	box_brush->numsides = 6;
-	box_brush->sides = cmg.brushsides + cmg.numBrushSides + t * BOX_SIDES;
+	box_brush->sides = box_sides;
 	box_brush->contents = CONTENTS_BODY;
 
 	memset( &box_model, 0, sizeof( box_model ) );
@@ -1052,15 +1060,15 @@ void CM_InitBoxHull (void)
 	box_model.leaf.numLeafBrushes = 1;
 //	box_model.leaf.firstLeafBrush = cmg.numBrushes;
 	box_model.leaf.firstLeafBrush = cmg.numLeafBrushes + t * BOX_BRUSHES;
-	cmg.leafbrushes[cmg.numLeafBrushes + t * BOX_BRUSHES] = cmg.numBrushes + t * BOX_BRUSHES;
+	cmg.leafbrushes[cmg.numLeafBrushes + t * BOX_BRUSHES] = cmg.numBrushes + t * CM_BOX_BRUSH_STRIDE;
 
 	for (i=0 ; i<6 ; i++)
 	{
 		side = i&1;
 
 		// brush sides
-		s = &cmg.brushsides[cmg.numBrushSides + t * BOX_SIDES + i];
-		s->plane = 	cmg.planes + (cmg.numPlanes + t * BOX_PLANES + i*2+side);
+		s = &box_sides[i];
+		s->plane = 	box_planes + (i*2+side);
 		s->shaderNum = cmg.numShaders;
 
 		// planes
@@ -1092,7 +1100,7 @@ Capsules are handled differently though.
 */
 clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule ) {
 	const int	t = Com_JobsThreadIndex();
-	cmodel_t	&box_model = box_models[t];
+	cmodel_t	&box_model = box_store[t].model;
 	cplane_t	*box_planes = box_planesT[t];
 	cbrush_t	*box_brush = box_brushT[t];
 

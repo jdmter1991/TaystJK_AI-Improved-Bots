@@ -2320,6 +2320,7 @@ void SV_AddOperatorCommands( void ) {
 	initialized = qtrue;
 
 	Cmd_AddCommand ("heartbeat", SV_Heartbeat_f, "Sends a heartbeat to the masterserver" );
+	Cmd_AddCommand ("sv_traceBench", SV_TraceBench_f, "Times collision traces on the main thread and on the job threads" );
 	Cmd_AddCommand ("kick", SV_Kick_f, "Kick a user from the server" );
 	Cmd_AddCommand ("kickbots", SV_KickBots_f, "Kick all bots from the server" );
 	Cmd_AddCommand ("kickall", SV_KickAll_f, "Kick all users from the server" );

@@ -25,6 +25,11 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "cm_polylib.h"
 #include "com_profile.h"
+#include "q_jobs.h"
+
+// temporary box brushes after the map's brushes: one per job thread, this many slots apart
+#define CM_BOX_BRUSH_STRIDE	4
+#define CM_BOX_BRUSH_SLOTS	( CM_BOX_BRUSH_STRIDE * JOBS_MAX_THREADS )
 #include "cm_public.h"
 #include "qcommon/qcommon.h"
 

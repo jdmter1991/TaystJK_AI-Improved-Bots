@@ -2877,7 +2877,9 @@ static void SV_JobsMergeProfile( int threads ) {
 		com_prof.cm.leafBrushesWalked += pt->cm.leafBrushesWalked;
 		com_prof.cm.brushesTested += pt->cm.brushesTested;
 		com_prof.cm.accelNodes += pt->cm.accelNodes;
+		const int en = pt->enabled;
 		memset( pt, 0, sizeof( *pt ) );
+		pt->enabled = en;
 	}
 }
 
@@ -2885,6 +2887,9 @@ static void SV_GameJobsParallelFor( int count, void ( *fn )( void *ctx, int inde
 	const int threads = Com_JobsThreads();
 	if ( threads > 1 && count > 1 ) {
 		CM_ThreadScratchEnsure( threads );
+		for ( int t = 1; t < threads && t < JOBS_MAX_THREADS; t++ ) {
+			com_profThread[t].enabled = com_prof.enabled;
+		}
 	}
 	{
 		ComProfPart profPart( CPP_JOBS );

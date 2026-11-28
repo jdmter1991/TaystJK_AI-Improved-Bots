@@ -871,7 +871,7 @@ Ghoul2 Insert End
 	if ( jobThread ) {
 		// a job thread: its own counters, merged after the parallel loop (SV_JobsMergeProfile)
 		comProfThread_t *pt = &com_profThread[jobThread];
-		const uint64_t t0 = com_prof.enabled ? Com_ProfNowNs() : 0;
+		const uint64_t t0 = pt->enabled ? Com_ProfNowNs() : 0;
 		pt->svTraces++;
 		CM_BoxTrace( &clip.trace, start, end, mins, maxs, 0, contentmask, capsule );
 		if ( t0 ) {
@@ -979,6 +979,88 @@ Ghoul2 Insert End
 }
 
 
+
+/*
+=============
+SV_TraceBench_f
+
+"sv_traceBench [count] [length]": the same set of line-of-sight traces (MASK_SOLID, between random
+points around the connected clients, so they run where the players are) made once on the main
+thread and once spread over the job threads; prints microseconds per trace for both. A test of how
+well collision traces scale over threads on this map and machine; results are compared, too.
+=============
+*/
+struct svTraceBench_t {
+	int			count;
+	vec3_t		*start, *end;
+	trace_t		*res;
+};
+static void SV_TraceBenchJob( void *ctx, int index, int thread ) {
+	svTraceBench_t *b = (svTraceBench_t *)ctx;
+	const int per = 64;
+	for ( int i = index * per; i < ( index + 1 ) * per && i < b->count; i++ ) {
+		SV_Trace( &b->res[i], b->start[i], NULL, NULL, b->end[i], ENTITYNUM_NONE, CONTENTS_SOLID, qfalse, 0, 0 );
+	}
+}
+void SV_TraceBench_f( void ) {
+	const int count = Cmd_Argc() > 1 ? atoi( Cmd_Argv( 1 ) ) : 20000;
+	const float len = Cmd_Argc() > 2 ? atof( Cmd_Argv( 2 ) ) : 1000.0f;
+	int anchors[MAX_CLIENTS], numAnchors = 0;
+	if ( count <= 0 || !sv.state ) {
+		return;
+	}
+	for ( int i = 0; i < sv_maxclients->integer && numAnchors < MAX_CLIENTS; i++ ) {
+		if ( svs.clients[i].state == CS_ACTIVE ) {
+			anchors[numAnchors++] = i;
+		}
+	}
+	if ( !numAnchors ) {
+		Com_Printf( "sv_traceBench: no clients in the game\n" );
+		return;
+	}
+	svTraceBench_t b;
+	b.count = count;
+	b.start = (vec3_t *)Z_Malloc( count * sizeof( vec3_t ), TAG_GENERAL, qfalse );
+	b.end = (vec3_t *)Z_Malloc( count * sizeof( vec3_t ), TAG_GENERAL, qfalse );
+	b.res = (trace_t *)Z_Malloc( count * sizeof( trace_t ), TAG_GENERAL, qfalse );
+	trace_t *ref = (trace_t *)Z_Malloc( count * sizeof( trace_t ), TAG_GENERAL, qfalse );
+	unsigned seed = 12345;
+	for ( int i = 0; i < count; i++ ) {
+		const sharedEntity_t *a = SV_GentityNum( anchors[i % numAnchors] );
+		for ( int k = 0; k < 3; k++ ) {
+			seed = seed * 1103515245u + 12345u;
+			const float r1 = ( ( seed >> 8 ) & 0xffff ) / 65535.0f - 0.5f;
+			seed = seed * 1103515245u + 12345u;
+			const float r2 = ( ( seed >> 8 ) & 0xffff ) / 65535.0f - 0.5f;
+			b.start[i][k] = a->r.currentOrigin[k] + ( k == 2 ? 40.0f : r1 * 64.0f );
+			b.end[i][k] = b.start[i][k] + r2 * 2.0f * len * ( k == 2 ? 0.25f : 1.0f );
+		}
+	}
+	const uint64_t t0 = Com_ProfNowNs();
+	for ( int i = 0; i < count; i++ ) {
+		SV_Trace( &ref[i], b.start[i], NULL, NULL, b.end[i], ENTITYNUM_NONE, CONTENTS_SOLID, qfalse, 0, 0 );
+	}
+	const uint64_t t1 = Com_ProfNowNs();
+	const int threads = Com_JobsThreads();
+	if ( threads > 1 ) {
+		CM_ThreadScratchEnsure( threads );
+	}
+	const uint64_t t2 = Com_ProfNowNs();
+	Com_JobsParallelFor( ( count + 63 ) / 64, SV_TraceBenchJob, &b );
+	const uint64_t t3 = Com_ProfNowNs();
+	int diff = 0;
+	for ( int i = 0; i < count; i++ ) {
+		if ( ref[i].fraction != b.res[i].fraction || ref[i].entityNum != b.res[i].entityNum || memcmp( ref[i].endpos, b.res[i].endpos, sizeof( vec3_t ) ) ) {
+			diff++;
+		}
+	}
+	Com_Printf( "sv_traceBench: %d traces of up to %.0f units: main thread %.2f us/trace, %d threads %.2f us/trace wall (x%.2f), %d results different\n",
+		count, len, ( t1 - t0 ) / 1e3 / count, threads, ( t3 - t2 ) / 1e3 / count, ( t3 - t2 ) ? (double)( t1 - t0 ) / ( t3 - t2 ) : 0.0, diff );
+	Z_Free( ref );
+	Z_Free( b.res );
+	Z_Free( b.end );
+	Z_Free( b.start );
+}
 
 /*
 =============

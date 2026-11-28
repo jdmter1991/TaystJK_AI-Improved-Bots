@@ -527,6 +527,7 @@ int SV_PointContents( const vec3_t p, int passEntityNum );
 
 void SV_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod );
 int SV_WorldGeneration( void );
+void SV_TraceBench_f( void );
 qboolean SV_BotSnapshotsWanted( void );
 void SV_BotSnapshotAsked( void );
 int SV_JobG2TracesTake( void );
