@@ -119,6 +119,48 @@ static struct {
 } sh;
 
 static cvar_t *cm_sharedCollision;
+
+// job threads (q_jobs): their own "visited by this query" stamps, allocated by CM_SharedThreadScratch
+// before a parallel loop (CM_ThreadScratchEnsure); the main thread keeps sh.stamp / sh.stampNow
+struct alignas( 64 ) shThreadStamp_t {
+	int		*stamp;
+	int		numItems;
+	int		now;
+};
+static shThreadStamp_t sh_threadStamp[JOBS_MAX_THREADS];
+
+void CM_SharedThreadScratchFree( void ) {
+	for ( int t = 0; t < JOBS_MAX_THREADS; t++ ) {
+		if ( sh_threadStamp[t].stamp ) {
+			Z_Free( sh_threadStamp[t].stamp );
+		}
+		sh_threadStamp[t].stamp = NULL;
+		sh_threadStamp[t].numItems = 0;
+		sh_threadStamp[t].now = 0;
+	}
+}
+
+// true when the arrays fit the loaded files (else the caller reallocates everything)
+bool CM_SharedThreadScratchOk( int threads ) {
+	const int numItems = sh.loaded ? sh.numTiles + sh.numPlacements : 0;
+	for ( int t = 1; t < threads; t++ ) {
+		if ( sh_threadStamp[t].numItems != numItems || ( numItems && !sh_threadStamp[t].stamp ) ) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void CM_SharedThreadScratch( int threads ) {
+	const int numItems = sh.loaded ? sh.numTiles + sh.numPlacements : 0;
+	CM_SharedThreadScratchFree();
+	for ( int t = 1; t < threads; t++ ) {
+		sh_threadStamp[t].numItems = numItems;
+		if ( numItems ) {
+			sh_threadStamp[t].stamp = (int *)Z_Malloc( ( (size_t)numItems + 1 ) * sizeof( int ), TAG_GENERAL, qtrue );
+		}
+	}
+}
 static void CM_SharedCompare_f( void );
 const byte *cm_skipBrushShader = NULL;
 int cm_skipBrushShaderCount = 0;
@@ -747,16 +789,18 @@ static void CM_SharedQuery( const vec3pair_t box, int contentsMask, shVisit_t vi
 		|| box[0][0] > sh.gridOrigin[0] + sh.gridW * sh.cellSize || box[0][1] > sh.gridOrigin[1] + sh.gridH * sh.cellSize ) {
 		return;
 	}
-	const int stamp = ++sh.stampNow;
+	const int thread = Com_JobsThreadIndex();
+	int *const stampArr = thread ? sh_threadStamp[thread].stamp : sh.stamp;
+	const int stamp = thread ? ++sh_threadStamp[thread].now : ++sh.stampNow;
 	for ( int y = y0; y <= y1; y++ ) {
 		for ( int x = x0; x <= x1; x++ ) {
 			const size_t c = (size_t)y * sh.gridW + x;
 			for ( int k = sh.cellStart[c]; k < sh.cellStart[c + 1]; k++ ) {
 				const int item = sh.cellItems[k];
-				if ( sh.stamp[item] == stamp ) {
+				if ( stampArr[item] == stamp ) {
 					continue;
 				}
-				sh.stamp[item] = stamp;
+				stampArr[item] = stamp;
 				const float *mn = item < sh.numTiles ? sh.tiles[item].mins : sh.places[item - sh.numTiles].mins;
 				const float *mx = item < sh.numTiles ? sh.tiles[item].maxs : sh.places[item - sh.numTiles].maxs;
 				if ( !CM_SharedBoxesMeet( mn, mx, box ) ) {

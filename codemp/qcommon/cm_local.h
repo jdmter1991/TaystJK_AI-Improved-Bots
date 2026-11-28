@@ -357,6 +357,9 @@ void CM_StoreLeafs( leafList_t *ll, int nodenum );
 // cm_shared.cpp - shared collision: maps/<name>.theight (terrain) and .tcol (shapes placed many times)
 void CM_SharedLoad( const char *bspName );
 void CM_SharedClear( void );
+void CM_SharedThreadScratch( int threads );		// (job threads' query stamps, from CM_ThreadScratchEnsure)
+bool CM_SharedThreadScratchOk( int threads );
+void CM_SharedThreadScratchFree( void );
 void CM_SharedTrace( traceWork_t *tw, trace_t &trace, bool position );
 int CM_SharedPointContents( const vec3_t p );
 extern const byte *cm_skipBrushShader;		// (cm_sharedcompare: the .bsp's brushes of these shaders left out; NULL normally)

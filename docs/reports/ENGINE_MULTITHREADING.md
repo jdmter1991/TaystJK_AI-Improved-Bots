@@ -234,6 +234,7 @@ threads at once while nothing links entities. The main thread's code path is unc
 | entity list of `SV_ClipMoveToEntities` | `static int touchlist[]` | one per thread |
 | `SV_Trace` / `SV_PointContents` profile counters | global | per thread, merged after the loop |
 | world sectors (the entity lists traces walk) | read by traces, written by `SV_LinkEntity` | only read during a loop; linking or unlinking during a loop is a fatal error |
+| shared collision of the big maps (cm_shared.cpp, merged from NicJK_Unlimited at the end: .theight / .tcol) | one "visited by this query" stamp array and counter | per thread for the job threads (allocated with the other stamps), main thread unchanged. Only maps with these files use it; the measurements above (mp/ffa3, naboo_theed) do not |
 | Ghoul2 hit tests inside traces | global `G2VertSpace`, transform caches, statics | not done from a job (never asked for; counted and reported if it happens) |
 
 **False sharing.** The first version kept the per-thread counters and boxes in plain arrays, so

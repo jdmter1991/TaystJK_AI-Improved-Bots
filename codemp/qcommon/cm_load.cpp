@@ -878,6 +878,7 @@ void CM_ThreadScratchFree( void ) {
 		cm_threadStamps[t] = NULL;
 	}
 	cm_threadStampThreads = 0;
+	CM_SharedThreadScratchFree();
 }
 
 void CM_ThreadScratchEnsure( int threads ) {
@@ -890,6 +891,9 @@ void CM_ThreadScratchEnsure( int threads ) {
 		for ( int m = 0; ok && m < NumSubBSP; m++ ) {
 			if ( !CM_StampsMatch( &cm_threadStamps[t][1 + m], &SubBSP[m] ) ) ok = false;
 		}
+	}
+	if ( ok && !CM_SharedThreadScratchOk( threads ) ) {
+		ok = false;
 	}
 	if ( ok ) {
 		return;
@@ -908,6 +912,7 @@ void CM_ThreadScratchEnsure( int threads ) {
 		}
 	}
 	cm_threadStampThreads = threads;
+	CM_SharedThreadScratch( threads );
 }
 
 cmStamp_t *CM_ThreadStamps( int thread ) {
