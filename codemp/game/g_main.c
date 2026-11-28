@@ -3312,7 +3312,13 @@ Runs thinking code for this frame if necessary
 =============
 */
 void proxMineThink( gentity_t *ent ); //OSP: pause
-void G_RunThink (gentity_t *ent) {
+void G_RunThink_GProfBody(gentity_t *ent);
+void G_RunThink(gentity_t *ent) {
+	GPZ_PUSH( GPZ_THINK );
+	G_RunThink_GProfBody(ent);
+	GPZ_POP();
+}
+void G_RunThink_GProfBody (gentity_t *ent) {
 	float	thinktime;
 
 	//OSP: pause
@@ -3677,6 +3683,7 @@ void G_RunFrame( int levelTime ) {
 	level.framenum++;
 	level.previousTime = level.time;
 	level.time = levelTime;
+	GProf_FrameBegin();
 
 
 
@@ -4303,7 +4310,9 @@ void G_RunFrame( int levelTime ) {
 				NAV_FindPlayerWaypoint(i);
 			}
 
+			GPZ_PUSH( GPZ_ICARUS );
 			trap->ICARUS_MaintainTaskManager(ent->s.number);
+			GPZ_POP();
 
 			G_RunClient( ent );
 			continue;
@@ -4383,7 +4392,9 @@ void G_RunFrame( int levelTime ) {
 #ifdef _G_FRAME_PERFANAL
 	trap->PrecisionTimer_Start(&timer_ROFF);
 #endif
+	GPZ_PUSH( GPZ_ICARUS );
 	trap->ROFF_UpdateEntities();
+	GPZ_POP();
 #ifdef _G_FRAME_PERFANAL
 	iTimer_ROFF = trap->PrecisionTimer_End(timer_ROFF);
 #endif
@@ -4397,7 +4408,9 @@ void G_RunFrame( int levelTime ) {
 	ent = &g_entities[0];
 	for (i=0 ; i < level.maxclients ; i++, ent++ ) {
 		if ( ent->inuse ) {
+			GPZ_PUSH( GPZ_ENDFRAME );
 			ClientEndFrame( ent );
+			GPZ_POP();
 		}
 	}
 #ifdef _G_FRAME_PERFANAL
@@ -4409,6 +4422,7 @@ void G_RunFrame( int levelTime ) {
 #ifdef _G_FRAME_PERFANAL
 	trap->PrecisionTimer_Start(&timer_GameChecks);
 #endif
+	GPZ_PUSH( GPZ_CHECKS );
 	// see if it is time to do a tournament restart
 	CheckTournament();
 
@@ -4453,6 +4467,7 @@ void G_RunFrame( int levelTime ) {
 			gQueueScoreMessage = 0;
 		}
 	}
+	GPZ_POP();
 #ifdef _G_FRAME_PERFANAL
 	iTimer_Queues = trap->PrecisionTimer_End(timer_Queues);
 #endif
@@ -4476,6 +4491,7 @@ void G_RunFrame( int levelTime ) {
 //unlagged - backward reconciliation #4
 
 	g_LastFrameTime = level.time;
+	GProf_FrameEnd();
 }
 
 const char *G_GetStringEdString(char *refSection, char *refName)

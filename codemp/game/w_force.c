@@ -5664,7 +5664,13 @@ qboolean G_SpecialRollGetup(gentity_t *self)
 	return rolled;
 }
 
-void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd )
+void WP_ForcePowersUpdate_GProfBody( gentity_t *self, usercmd_t *ucmd );
+void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd ) {
+	GPZ_PUSH( GPZ_FORCE );
+	WP_ForcePowersUpdate_GProfBody(self, ucmd);
+	GPZ_POP();
+}
+void WP_ForcePowersUpdate_GProfBody( gentity_t *self, usercmd_t *ucmd )
 {
 	if ( JK2SABER() && self && !self->NPC ) { WP_ForcePowersUpdate_JK2(self, ucmd); return; } // JK2 1.02 (w_force_jk2.c)
 	int			i;//, holo, holoregen;

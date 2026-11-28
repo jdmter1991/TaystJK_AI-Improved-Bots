@@ -506,7 +506,13 @@ G_RunMover
 
 ================
 */
+void G_RunMover_GProfBody( gentity_t *ent );
 void G_RunMover( gentity_t *ent ) {
+	GPZ_PUSH( GPZ_MOVER );
+	G_RunMover_GProfBody(ent);
+	GPZ_POP();
+}
+void G_RunMover_GProfBody( gentity_t *ent ) {
 	// if not a team captain, don't do anything, because
 	// the captain will handle everything
 	if ( ent->flags & FL_TEAMSLAVE ) {

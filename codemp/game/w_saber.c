@@ -4053,7 +4053,15 @@ static QINLINE int SaberKickTweak(gentity_t *self)
 }
 
 static QINLINE qboolean WP_SaberCanBlockSwing(int ourStr, int attackStr);
-static QINLINE qboolean CheckSaberDamage(gentity_t *self, int rSaberNum, int rBladeNum, vec3_t saberStart, vec3_t saberEnd, qboolean doInterpolate, int trMask, qboolean extrapolate )
+static qboolean CheckSaberDamage_GProfBody(gentity_t *self, int rSaberNum, int rBladeNum, vec3_t saberStart, vec3_t saberEnd, qboolean doInterpolate, int trMask, qboolean extrapolate);
+static qboolean CheckSaberDamage(gentity_t *self, int rSaberNum, int rBladeNum, vec3_t saberStart, vec3_t saberEnd, qboolean doInterpolate, int trMask, qboolean extrapolate) {
+	qboolean r;
+	GPZ_PUSH( GPZ_SABERDMG );
+	r = CheckSaberDamage_GProfBody(self, rSaberNum, rBladeNum, saberStart, saberEnd, doInterpolate, trMask, extrapolate);
+	GPZ_POP();
+	return r;
+}
+static QINLINE qboolean CheckSaberDamage_GProfBody(gentity_t *self, int rSaberNum, int rBladeNum, vec3_t saberStart, vec3_t saberEnd, qboolean doInterpolate, int trMask, qboolean extrapolate )
 {
 	static trace_t tr;
 	static vec3_t dir;
@@ -5948,7 +5956,13 @@ qboolean Jedi_WaitingAmbush( gentity_t *self );
 void Jedi_Ambush( gentity_t *self );
 evasionType_t Jedi_SaberBlockGo( gentity_t *self, usercmd_t *cmd, vec3_t pHitloc, vec3_t phitDir, gentity_t *incoming, float dist );
 void NPC_SetLookTarget( gentity_t *self, int entNum, int clearTime );
-void WP_SaberStartMissileBlockCheck( gentity_t *self, usercmd_t *ucmd  )
+void WP_SaberStartMissileBlockCheck_GProfBody( gentity_t *self, usercmd_t *ucmd );
+void WP_SaberStartMissileBlockCheck( gentity_t *self, usercmd_t *ucmd ) {
+	GPZ_PUSH( GPZ_SABERBLOCK );
+	WP_SaberStartMissileBlockCheck_GProfBody(self, ucmd);
+	GPZ_POP();
+}
+void WP_SaberStartMissileBlockCheck_GProfBody( gentity_t *self, usercmd_t *ucmd  )
 {
 	float		dist;
 	gentity_t	*ent, *incoming = NULL;
@@ -8734,7 +8748,13 @@ static void G_GrabSomeMofos(gentity_t *self)
 	}
 }
 
-void WP_SaberPositionUpdate( gentity_t *self, usercmd_t *ucmd )
+void WP_SaberPositionUpdate_GProfBody( gentity_t *self, usercmd_t *ucmd );
+void WP_SaberPositionUpdate( gentity_t *self, usercmd_t *ucmd ) {
+	GPZ_PUSH( GPZ_SABERPOS );
+	WP_SaberPositionUpdate_GProfBody(self, ucmd);
+	GPZ_POP();
+}
+void WP_SaberPositionUpdate_GProfBody( gentity_t *self, usercmd_t *ucmd )
 { //rww - keep the saber position as updated as possible on the server so that we can try to do realistic-looking contact stuff
   //Note that this function also does the majority of working in maintaining the server g2 client instance (updating angles/anims/etc)
 	gentity_t *mySaber = NULL;

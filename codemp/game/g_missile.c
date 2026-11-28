@@ -1168,7 +1168,13 @@ killProj:
 G_RunMissile
 ================
 */
+void G_RunMissile_GProfBody( gentity_t *ent );
 void G_RunMissile( gentity_t *ent ) {
+	GPZ_PUSH( GPZ_MISSILE );
+	G_RunMissile_GProfBody(ent);
+	GPZ_POP();
+}
+void G_RunMissile_GProfBody( gentity_t *ent ) {
 	vec3_t		origin, groundSpot;
 	trace_t		tr;
 	int			passent;

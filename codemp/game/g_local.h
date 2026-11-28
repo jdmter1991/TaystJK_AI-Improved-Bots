@@ -2069,6 +2069,7 @@ int BotAIShutdownClient( int client, qboolean restart );
 int BotAIStartFrame( int time );
 
 #include "g_team.h" // teamplay specific stuff
+#include "g_prof.h"
 
 
 extern	level_locals_t	level;

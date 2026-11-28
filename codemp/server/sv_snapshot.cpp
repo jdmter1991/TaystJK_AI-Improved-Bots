@@ -22,6 +22,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "server.h"
+#include "qcommon/com_profile.h"
 #include "qcommon/cm_public.h"
 
 #ifdef DEDICATED
@@ -1013,7 +1014,10 @@ void SV_SendClientSnapshot( client_t *client ) {
 	}
 
 	// build the snapshot
-	SV_BuildClientSnapshot( client );
+	{
+		ComProfPart profPart( CPP_SNAPBUILD );
+		SV_BuildClientSnapshot( client );
+	}
 
 #ifdef DEDICATED
 	if ( !client->demo.demorecording ) { //dont think this needs to be done with singledemo option
@@ -1040,6 +1044,7 @@ void SV_SendClientSnapshot( client_t *client ) {
 		return;
 	}
 
+	ComProfPart profPart( CPP_SNAPSEND );
 	MSG_Init (&msg, msg_buf, sizeof(msg_buf));
 	msg.allowoverflow = qtrue;
 

@@ -1405,7 +1405,13 @@ Find all trigger entities that ent's current position touches.
 Spectators will only interact with teleporters.
 ============
 */
-void	G_TouchTriggers( gentity_t *ent ) {
+void G_TouchTriggers_GProfBody( gentity_t *ent );
+void G_TouchTriggers( gentity_t *ent ) {
+	GPZ_PUSH( GPZ_TRIGGERS );
+	G_TouchTriggers_GProfBody(ent);
+	GPZ_POP();
+}
+void	G_TouchTriggers_GProfBody( gentity_t *ent ) {
 	int			i, num;
 	int			touch[MAX_GENTITIES];
 	gentity_t	*hit;
@@ -1890,7 +1896,13 @@ but any server game effects are handled here
 */
 qboolean BG_InKnockDownOnly( int anim );
 
+void ClientEvents_GProfBody( gentity_t *ent, int oldEventSequence );
 void ClientEvents( gentity_t *ent, int oldEventSequence ) {
+	GPZ_PUSH( GPZ_CLEVENTS );
+	ClientEvents_GProfBody(ent, oldEventSequence);
+	GPZ_POP();
+}
+void ClientEvents_GProfBody( gentity_t *ent, int oldEventSequence ) {
 	int		i;//, j;
 	int		event;
 	gclient_t *client;
@@ -3455,7 +3467,13 @@ static void G_GunDuelEndWeapon(gentity_t *ent)
 void Cmd_RaceTele_f(gentity_t *ent, qboolean useForce);
 extern void G_MB2BlockThink( gentity_t *ent );
 extern void G_ApplyPlayerModelScale( gentity_t *ent, const char *modelWithSkin, qboolean setBoxNow );
+void ClientThink_real_GProfBody( gentity_t *ent );
 void ClientThink_real( gentity_t *ent ) {
+	GPZ_PUSH( GPZ_CLIENT );
+	ClientThink_real_GProfBody(ent);
+	GPZ_POP();
+}
+void ClientThink_real_GProfBody( gentity_t *ent ) {
 	gclient_t	*client;
 	pmove_t		pmove;
 	int			oldEventSequence;
@@ -5224,7 +5242,9 @@ void ClientThink_real( gentity_t *ent ) {
 #endif
 	}
 
+	GPZ_PUSH( GPZ_PMOVE );
 	Pmove (&pmove);
+	GPZ_POP();
 
 	if (ent->client->solidHack)
 	{

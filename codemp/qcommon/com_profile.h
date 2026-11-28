@@ -13,6 +13,18 @@ maintained; timestamps are only taken while profiling is enabled.
 #include <chrono>
 #include <cstdint>
 
+// engine-side parts of the frame, timed where the game calls into the engine (Ghoul2) and in the
+// snapshot code; they overlap the phases above (the Ghoul2 parts are inside "game" and "botai")
+enum comProfPart_e {
+	CPP_G2BOLT = 0,		// G2API_GetBoltMatrix* (skeleton transforms for bolts: saber, hands, head)
+	CPP_G2COLL,			// Ghoul2 collision: G2API_CollisionDetect* and Ghoul2 hit tests inside traces
+	CPP_G2ANIM,			// G2API_SetBoneAnim / SetBoneAngles / GetBoneAnim and other Ghoul2 state calls
+	CPP_SNAPBUILD,		// SV_BuildClientSnapshot (entity culling, PVS)
+	CPP_SNAPSEND,		// writing and sending snapshots to network clients
+	CPP_JOBS,			// wall time of parallel sections (main thread waiting included)
+	CPP_NUM_PARTS
+};
+
 enum comProfPhase_e {
 	CPROF_OTHER = 0,	// client packets (human usercmds), misc
 	CPROF_BOTAI,		// SV_BotFrame -> BotAIStartFrame
@@ -46,6 +58,10 @@ typedef struct comProfile_s {
 	// time spent in Com_Printf (console window, log file): taken out of the SVPROF frame times,
 	// since printing the profile itself could stall a frame for a second on a busy machine
 	uint64_t	printNs;
+
+	// engine-side parts (comProfPart_e): time in the current frame and calls since start
+	uint64_t	partFrameNs[CPP_NUM_PARTS];
+	uint64_t	partCalls[CPP_NUM_PARTS];
 } comProfile_t;
 
 extern comProfile_t com_prof;
@@ -54,3 +70,17 @@ static inline uint64_t Com_ProfNowNs( void ) {
 	return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
 		std::chrono::steady_clock::now().time_since_epoch() ).count();
 }
+
+// times one engine-side part while profiling is on (main thread only: the parallel jobs book their
+// own counters)
+struct ComProfPart {
+	int			part;
+	uint64_t	t0;
+	explicit ComProfPart( int p ) : part( p ), t0( com_prof.enabled ? Com_ProfNowNs() : 0 ) {}
+	~ComProfPart() {
+		if ( t0 ) {
+			com_prof.partFrameNs[part] += Com_ProfNowNs() - t0;
+			com_prof.partCalls[part]++;
+		}
+	}
+};

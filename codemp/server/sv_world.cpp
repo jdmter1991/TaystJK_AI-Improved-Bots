@@ -756,6 +756,7 @@ Ghoul2 Insert Start
 			}
 #endif
 
+			ComProfPart profPart( CPP_G2COLL );
 			if (com_optvehtrace &&
 				com_optvehtrace->integer &&
 				touch->s.eType == ET_NPC &&

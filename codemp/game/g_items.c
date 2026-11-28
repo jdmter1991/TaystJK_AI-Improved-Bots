@@ -3592,7 +3592,13 @@ G_RunItem
 
 ================
 */
+void G_RunItem_GProfBody( gentity_t *ent );
 void G_RunItem( gentity_t *ent ) {
+	GPZ_PUSH( GPZ_ITEM );
+	G_RunItem_GProfBody(ent);
+	GPZ_POP();
+}
+void G_RunItem_GProfBody( gentity_t *ent ) {
 	vec3_t		origin;
 	trace_t		tr;
 	int			contents;

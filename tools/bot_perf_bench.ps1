@@ -37,7 +37,7 @@ $qlog = Join-Path $modDir "qconsole.log"
 if (Test-Path $qlog) { Remove-Item $qlog -Force }
 
 $argList = "+set fs_basepath `"$BasePath`" +set fs_homepath `"$DevDir`" +set fs_game nicjk +set dedicated 1 " +
-    "+set net_port $Port +set com_hunkmegs 2048 +exec bench.cfg +set sv_fps $SvFps +set sv_profile $Window +set bot_profile $Window +set bot_profileEval $(if ($Eval) { 1 } else { 0 }) " +
+    "+set net_port $Port +set com_hunkmegs 2048 +exec bench.cfg +set sv_fps $SvFps +set sv_profile $Window +set bot_profile $Window +set g_profile $Window +set bot_profileEval $(if ($Eval) { 1 } else { 0 }) " +
     "$Extra +set logfile 1 +map $Map +exec perf_bots.cfg"
 # console output goes to NUL: writing it to a redirected file stalled the server for seconds
 # (NtWriteFile inside Com_Printf, seen with com_sampleProfile), which distorted every timing
@@ -78,6 +78,7 @@ Copy-Item $qlog (Join-Path $DevDir "perf_$Tag.qconsole.log") -Force
 
 # ---- parse the windows that ended inside the measured interval ----
 $sv = @(); $bp = @(); $kc = @(); $sch = @(0, 0, 0); $why = @(0, 0, 0, 0, 0, 0); $bz = @{}; $pct = @(); $tr = @(); $ev = $null
+$gp = @(); $gz = @{}; $pz = @{}
 $inWin = $false
 foreach ($line in Get-Content $qlog) {
     if ($line.Length -lt 20) { continue }
@@ -92,6 +93,18 @@ foreach ($line in Get-Content $qlog) {
         if ($sv.Count) { $c = $sv[-1]; $c.total = [double]$Matches[1]; $c.totalMax = [double]$Matches[2]; $c.botai = [double]$Matches[3]; $c.botaiMax = [double]$Matches[4]; $c.game = [double]$Matches[5]; $c.gameMax = [double]$Matches[6]; $c.snap = [double]$Matches[7] }
     } elseif ($msg -match '^SVPROF percentiles ms: total p50 ([\d.]+) p95 ([\d.]+) p99 ([\d.]+)\s+botai p50 ([\d.]+) p95 ([\d.]+) p99 ([\d.]+)') {
         if ($sv.Count) { $c = $sv[-1]; $c.tP50 = [double]$Matches[1]; $c.tP95 = [double]$Matches[2]; $c.tP99 = [double]$Matches[3]; $c.bP99 = [double]$Matches[6] }
+    } elseif ($msg -match '^SVPROF percentiles ms: game p50 ([\d.]+) p99 ([\d.]+)\s+snap p50 ([\d.]+) p99 ([\d.]+)') {
+        if ($sv.Count) { $c = $sv[-1]; $c.gP99 = [double]$Matches[2]; $c.sP99 = [double]$Matches[4] }
+    } elseif ($msg -match '^SVPROF part (.+?)\s+ms/frame avg ([\d.]+) p99 ([\d.]+) max ([\d.]+)\s+calls/frame ([\d.]+)') {
+        $n = $Matches[1].Trim()
+        if (-not $pz.ContainsKey($n)) { $pz[$n] = @() }
+        $pz[$n] += , @([double]$Matches[2], [double]$Matches[3], [double]$Matches[4], [double]$Matches[5])
+    } elseif ($msg -match '^GAMEPROF window=\S+ frames=(\d+) clients=\d+ bots=\d+ entities=(\d+)\s+game ms/frame avg ([\d.]+) p99 ([\d.]+) max ([\d.]+)') {
+        $gp += , [ordered]@{ frames = [int]$Matches[1]; ents = [int]$Matches[2]; avg = [double]$Matches[3]; p99 = [double]$Matches[4]; max = [double]$Matches[5] }
+    } elseif ($msg -match '^GAMEZONE (.+?)\s+self ms/frame avg\s+([\d.]+) p99\s+([\d.]+) max\s+([\d.]+)\s+[\d.]+%\s+calls/frame\s+([\d.]+)') {
+        $n = $Matches[1].Trim()
+        if (-not $gz.ContainsKey($n)) { $gz[$n] = @() }
+        $gz[$n] += , @([double]$Matches[2], [double]$Matches[3], [double]$Matches[4], [double]$Matches[5])
     } elseif ($msg -match '^SVPROF botai traces/frame ([\d.]+)\s+trace ms/frame ([\d.]+)') {
         if ($sv.Count) { $sv[-1].aiTraces = [double]$Matches[1]; $sv[-1].aiTraceMs = [double]$Matches[2] }
     } elseif ($msg -match '^SVPROF game\s+traces/frame ([\d.]+)\s+trace ms/frame ([\d.]+)') {
@@ -130,6 +143,18 @@ foreach ($k in ($bz.Keys | Sort-Object { - ($bz[$_] | ForEach-Object { $_[0] } |
                    [math]::Round(($rows | ForEach-Object { $_[1] } | Measure-Object -Average).Average, 2),
                    [math]::Round(($rows | ForEach-Object { $_[2] } | Measure-Object -Average).Average, 2))
 }
+function ZoneSummary($h) {
+    # per zone: [avg ms/frame, p99 (mean of the window p99s), max of the window maxima, calls/frame]
+    $o = [ordered]@{}
+    foreach ($k in ($h.Keys | Sort-Object { - ($h[$_] | ForEach-Object { $_[0] } | Measure-Object -Sum).Sum })) {
+        $rows = $h[$k]
+        $o[$k] = @([math]::Round(($rows | ForEach-Object { $_[0] } | Measure-Object -Average).Average, 4),
+                   [math]::Round(($rows | ForEach-Object { $_[1] } | Measure-Object -Average).Average, 3),
+                   [math]::Round(($rows | ForEach-Object { $_[2] } | Measure-Object -Maximum).Maximum, 3),
+                   [math]::Round(($rows | ForEach-Object { $_[3] } | Measure-Object -Average).Average, 2))
+    }
+    $o
+}
 $res = [ordered]@{
     tag = $Tag; map = $Map; botsAsked = $Bots; bots = (MaxOf $sv 'bots'); svFps = $SvFps; extra = $Extra; windows = $sv.Count
     cpuCorePct = [math]::Round(100 * $cpu / $wall, 1)
@@ -141,6 +166,9 @@ $res = [ordered]@{
     thinkUs = (WAvg $bp 'think'); thinkMaxUs = (MaxOf $bp 'thinkMax'); thinksPerFrame = (Avg $pct 'tpf'); aiKCycles = (Avg $kc 'kc'); aiKCyclesPerBot = (Avg $kc 'kcBot'); usPerBotFrame = (Avg $pct 'perBot')
     sched = $sch; schedWhy = $why
     eval = $ev; zones = $zones
+    gameP99 = (Avg $sv 'gP99'); snapP99 = (Avg $sv 'sP99')
+    gfMs = (Avg $gp 'avg'); gfP99 = (Avg $gp 'p99'); gfMax = (MaxOf $gp 'max'); entities = (MaxOf $gp 'ents')
+    gameZones = (ZoneSummary $gz); parts = (ZoneSummary $pz)
 }
 $json = $res | ConvertTo-Json -Compress -Depth 5
 Add-Content -Path $Results -Value $json
