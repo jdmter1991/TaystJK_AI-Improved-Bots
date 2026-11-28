@@ -20739,7 +20739,10 @@ typedef struct {
 	int		n;
 	int		client[MAX_CLIENTS];
 	int		mode[MAX_CLIENTS];
+	double	itemUs[MAX_CLIENTS];	/* how long each item took (profiling) */
+	int		itemThread[MAX_CLIENTS];
 } botMtJobs_t;
+static double botMtWallUs, botMtItemUs, botMtThreadItemUs[16];
 static botMtJobs_t botMtJobs;
 
 static void BotMt_SenseJob(void *ctx, int index, int thread) {
@@ -20747,11 +20750,30 @@ static void BotMt_SenseJob(void *ctx, int index, int thread) {
 	const int c = jobs->client[index];
 	botMtSense_t *s = &botMtSense[c];
 	(void)thread;
+	const double t0 = botProf.enabled ? BotProf_NowUs() : 0.0;
 	s->count = 0;
 	s->used = 0;
 	s->time = level.time;
 	s->gen = botMtFrameGen;
 	BotMt_SenseOne(botstates[c], s, jobs->mode[index]);
+	if (botProf.enabled) {
+		jobs->itemUs[index] = BotProf_NowUs() - t0;
+		jobs->itemThread[index] = thread;
+	}
+}
+
+/* profiling: wall time of the loop against the time its items took, per thread */
+static void BotMt_AccountLoop(double wallUs) {
+	int i;
+	if (!botProf.enabled) {
+		return;
+	}
+	botMtWallUs += wallUs;
+	for (i = 0; i < botMtJobs.n; i++) {
+		botMtItemUs += botMtJobs.itemUs[i];
+		botMtThreadItemUs[botMtJobs.itemThread[i] & 15] += botMtJobs.itemUs[i];
+		botMtJobs.itemUs[i] = 0.0;
+	}
 }
 
 static qboolean BotMt_Available(void) {
@@ -20790,7 +20812,11 @@ static void BotMt_SensePhase(void) {
 	}
 	botMtFrameGen = trap->WorldGeneration();
 	botMtLastThreads = trap->JobsThreads();
-	trap->JobsParallelFor(botMtJobs.n, BotMt_SenseJob, &botMtJobs);
+	{
+		const double t0 = botProf.enabled ? BotProf_NowUs() : 0.0;
+		trap->JobsParallelFor(botMtJobs.n, BotMt_SenseJob, &botMtJobs);
+		BotMt_AccountLoop(botProf.enabled ? BotProf_NowUs() - t0 : 0.0);
+	}
 	botMtStat[BMS_PHASES]++;
 	for (i = 0; i < botMtJobs.n; i++) {
 		botMtStat[BMS_PREFETCH] += botMtSense[botMtJobs.client[i]].count;
@@ -20852,11 +20878,16 @@ static void BotMt_CliffJob(void *ctx, int index, int thread) {
 	const int c = jobs->client[index];
 	botMtSense_t *s = &botMtSense[c];
 	(void)thread;
+	const double t0 = botProf.enabled ? BotProf_NowUs() : 0.0;
 	s->count = 0;
 	s->used = 0;
 	s->time = level.time;
 	s->gen = botMtFrameGen;
 	BotMt_PrefetchCliff(botstates[c], s, &botMtBi[c]);
+	if (botProf.enabled) {
+		jobs->itemUs[index] = BotProf_NowUs() - t0;
+		jobs->itemThread[index] = thread;
+	}
 }
 
 /* between the two parts of the commands (bot_mt 8) */
@@ -20878,7 +20909,11 @@ static void BotMt_CliffPhase(void) {
 		return;
 	}
 	botMtFrameGen = trap->WorldGeneration();
-	trap->JobsParallelFor(botMtJobs.n, BotMt_CliffJob, &botMtJobs);
+	{
+		const double t0 = botProf.enabled ? BotProf_NowUs() : 0.0;
+		trap->JobsParallelFor(botMtJobs.n, BotMt_CliffJob, &botMtJobs);
+		BotMt_AccountLoop(botProf.enabled ? BotProf_NowUs() - t0 : 0.0);
+	}
 	for (i = 0; i < botMtJobs.n; i++) {
 		botMtStat[BMS_PREFETCH] += botMtSense[botMtJobs.client[i]].count;
 	}
@@ -20893,6 +20928,11 @@ static void BotMt_Report(double frames) {
 		bot_mt.integer, botMtLastThreads, botMtStat[BMS_PREFETCH] / f, botMtStat[BMS_HIT] / f,
 		botMtStat[BMS_PREFETCH] ? 100.0 * botMtStat[BMS_HIT] / botMtStat[BMS_PREFETCH] : 0.0,
 		botMtStat[BMS_MISS] / f, botMtStat[BMS_UNUSED] / f, botMtStat[BMS_STALE] / f, botMtStat[BMS_VCHECK], botMtStat[BMS_VBAD]);
+	trap->Print("BOTPROF parallel sense loops: wall %.3f ms/frame, items %.3f ms/frame of work (main thread %.3f, job threads %.3f %.3f %.3f %.3f %.3f %.3f %.3f)\n",
+		botMtWallUs / f / 1e3, botMtItemUs / f / 1e3, botMtThreadItemUs[0] / f / 1e3, botMtThreadItemUs[1] / f / 1e3, botMtThreadItemUs[2] / f / 1e3,
+		botMtThreadItemUs[3] / f / 1e3, botMtThreadItemUs[4] / f / 1e3, botMtThreadItemUs[5] / f / 1e3, botMtThreadItemUs[6] / f / 1e3, botMtThreadItemUs[7] / f / 1e3);
+	botMtWallUs = botMtItemUs = 0.0;
+	memset(botMtThreadItemUs, 0, sizeof(botMtThreadItemUs));
 	memset(botMtStat, 0, sizeof(botMtStat));
 }
 
