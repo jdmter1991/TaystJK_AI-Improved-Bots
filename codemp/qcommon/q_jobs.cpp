@@ -24,8 +24,7 @@ several loops back to back), then sleep on a condition variable.
 #include <intrin.h>
 #define JOBS_PAUSE() _mm_pause()
 #elif ( defined( __i386__ ) || defined( __x86_64__ ) )
-#include <immintrin.h>
-#define JOBS_PAUSE() _mm_pause()
+#define JOBS_PAUSE() __asm__ __volatile__( "pause" )	// (rep nop: any x86, no SSE2 needed)
 #elif defined( __aarch64__ ) || defined( __arm__ )
 #define JOBS_PAUSE() __asm__ __volatile__( "yield" )
 #else
