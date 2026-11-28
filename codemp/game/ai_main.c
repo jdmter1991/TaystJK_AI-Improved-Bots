@@ -20483,6 +20483,15 @@ static int BotMtFor(int client) {
 	return bot_mt.integer;
 }
 
+/* the bits used by any bot (with an A/B test the baseline group can use bot_mt while the other does not) */
+static int BotMt_AnyMode(void) {
+	int m = bot_mt.integer;
+	if (bot_abTest.integer > 0 && bot_mtBase.integer > 0) {
+		m |= bot_mtBase.integer;
+	}
+	return m;
+}
+
 static qboolean BotMt_KeyEq(const botMtMemo_t *m, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int pass, int mask, int capsule, int flags, int lod, int jp) {
 	static const vec3_t zero = { 0, 0, 0 };
 	if (m->pass != pass || m->mask != mask || m->capsule != capsule || m->flags != flags || m->lod != lod || m->jp != jp) {
@@ -20877,7 +20886,7 @@ static void BotMt_CliffPhase(void) {
 
 static void BotMt_Report(double frames) {
 	const double f = frames > 0 ? frames : 1;
-	if (!bot_mt.integer && !botMtStat[BMS_PREFETCH]) {
+	if (!BotMt_AnyMode() && !botMtStat[BMS_PREFETCH]) {
 		return;
 	}
 	trap->Print("BOTPROF parallel sense (bot_mt %d, %d threads): traces made early %.1f/frame, used %.1f (%.0f%%), not made early %.1f, unused %.1f, dropped (world changed) %.1f; verify %d checks %d different\n",
@@ -20963,7 +20972,7 @@ int BotAIStartFrame(int time) {
 	else thinktime = BOT_THINK_TIME;
 
 	BPZ_Pop();
-	if (bot_mt.integer && BotMt_Available()) {
+	if (BotMt_AnyMode() && BotMt_Available()) {
 		BPZ_Push(BPZ_MTSENSE);
 		BotMt_SensePhase();
 		BPZ_Pop();
@@ -20998,7 +21007,7 @@ int BotAIStartFrame(int time) {
 	}
 
 	// execute bot user commands every frame
-	if (mtOn && (bot_mt.integer & BOTMT_CLIFF)) {
+	if (mtOn && (BotMt_AnyMode() & BOTMT_CLIFF)) {
 		/* bot_mt 8: the commands in two passes with the cliff traces made in parallel in between */
 		for (i = 0; i < MAX_CLIENTS; i++) {
 			if (!botstates[i] || !botstates[i]->inuse || g_entities[i].client->pers.connected != CON_CONNECTED) {
