@@ -835,6 +835,11 @@ void *Hunk_Alloc( int size, ha_pref preference ) {
 	return Z_Malloc(size, hunk_tag, qtrue);
 }
 
+// Hunk_Alloc with a 64-bit size: a big map's collision tables (Dromund Kaas: 112 million planes, 2.25 GB in one block)
+void *Hunk_AllocLarge( size_t size, ha_pref preference ) {
+	return Z_MallocLarge(size, hunk_tag, qtrue);
+}
+
 /*
 =================
 Hunk_AllocateTempMemory

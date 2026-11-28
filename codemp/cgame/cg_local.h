@@ -2742,6 +2742,10 @@ CosmeticUnlocks_t cosmeticUnlocks[MAX_COSMETIC_UNLOCKS];
 //japro
 
 //
+// cg_mapfx.c
+void CG_MapFX_Load( void );
+void CG_MapFX_Add( void );
+
 // cg_effects.c
 //
 localEntity_t *CG_SmokePuff( const vec3_t p,

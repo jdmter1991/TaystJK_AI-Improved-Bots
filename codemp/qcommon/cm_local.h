@@ -353,6 +353,16 @@ typedef struct leafList_s {
 } leafList_t;
 
 void CM_StoreLeafs( leafList_t *ll, int nodenum );
+
+// cm_shared.cpp - shared collision: maps/<name>.theight (terrain) and .tcol (shapes placed many times)
+void CM_SharedLoad( const char *bspName );
+void CM_SharedClear( void );
+void CM_SharedTrace( traceWork_t *tw, trace_t &trace, bool position );
+int CM_SharedPointContents( const vec3_t p );
+extern const byte *cm_skipBrushShader;		// (cm_sharedcompare: the .bsp's brushes of these shaders left out; NULL normally)
+extern int cm_skipBrushShaderCount;
+void CM_TestBoxInBrush( traceWork_t *tw, trace_t &trace, cbrush_t *brush );
+void CM_TraceThroughBrush( traceWork_t *tw, trace_t &trace, cbrush_t *brush, bool infoOnly );
 void CM_StoreBrushes( leafList_t *ll, int nodenum );
 
 void CM_BoxLeafnums_r( leafList_t *ll, int nodenum );

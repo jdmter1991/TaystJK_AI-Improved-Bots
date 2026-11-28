@@ -1986,11 +1986,13 @@ int64_t FS_FOpenFileReadLarge( const char *qpath, fileHandle_t *file ) {
 =================
 FS_ReadLarge
 
-FS_Read for lengths of 2 GB or more: reads in blocks of 256 MB. Returns the number of bytes read.
+FS_Read for lengths of 2 GB or more: reads in blocks of 16 MB (one 256 MB read can fail when memory is short -
+Windows refuses it for lack of system resources: a big map's parts failed to load after its 2.9 GB main map).
+Returns the number of bytes read.
 =================
 */
 int64_t FS_ReadLarge( void *buffer, int64_t len, fileHandle_t f ) {
-	const int64_t	block = 256 * 1024 * 1024;
+	const int64_t	block = 16 * 1024 * 1024;
 	byte			*buf = (byte *)buffer;
 	int64_t			done = 0;
 

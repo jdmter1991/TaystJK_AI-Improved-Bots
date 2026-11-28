@@ -27,6 +27,9 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "q_jobs.h"
 #include "qcommon/qfiles.h"
 
+// (a big map's tables pass 2 GB: planes, brush sides - every allocation here takes a 64-bit size)
+#define Hunk_Alloc( size, pref ) Hunk_AllocLarge( (size_t)( size ), pref )
+
 #ifdef BSPC
 
 #include "../bspc/l_qfiles.h"
@@ -792,6 +795,7 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
 	{
 		// Load in the shader text - return instantly if already loaded
 		CM_InitBoxHull ();
+		CM_SharedLoad( name );		// (its shared collision files, when it has them)
 	}
 
 #ifndef BSPC	// I hope we can lose this crap soon
@@ -923,6 +927,7 @@ void CM_ClearMap( void )
 
 	Com_Memset( &cmg, 0, sizeof( cmg ) );
 	CM_ClearLevelPatches();
+	CM_SharedClear();
 
 	for(i = 0; i < NumSubBSP; i++)
 	{

@@ -3046,6 +3046,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	// build the render lists
 	if ( !cg.hyperspace ) {
 		CG_AddPacketEntities(qfalse);            // adter calcViewValues, so predicted player state is correct
+		CG_MapFX_Add();                          // the map's ambient effects (maps/<name>.tfx: cg_mapfx.c)
 		CG_AddMarks();
 #if _NEWTRAILS
 		if (cg.drawingStrafeTrails) {

@@ -1910,7 +1910,8 @@ static	void R_LoadPlanes( const lump_t *l, world_t &worldData ) {
 	if (l->filelen % sizeof(*in))
 		Com_Error (ERR_DROP, "LoadMap: funny lump size in %s",worldData.name);
 	count = l->filelen / sizeof(*in);
-	out = (struct cplane_s *)Hunk_Alloc ( count*2*sizeof(*out), h_low);
+	out = (struct cplane_s *)ri.Hunk_AllocLarge( (size_t)count * sizeof(*out), h_low );	// (was count * 2, never used past count;
+																						//  a big map's planes pass 2 GB)
 
 	worldData.planes = out;
 	worldData.numplanes = count;

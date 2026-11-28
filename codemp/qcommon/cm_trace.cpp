@@ -248,6 +248,9 @@ void CM_TestInLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *l
 		if ( !(b->contents & tw->contents)) {
 			continue;
 		}
+		if ( cm_skipBrushShader && b->shaderNum >= 0 && b->shaderNum < cm_skipBrushShaderCount && cm_skipBrushShader[b->shaderNum] ) {
+			continue;
+		}
 
 		CM_TestBoxInBrush( tw, trace, b );
 		if ( trace.allsolid ) {
@@ -705,6 +708,9 @@ void CM_TraceThroughLeaf( traceWork_t *tw, trace_t &trace, clipMap_t *local, cLe
 		if ( !(b->contents & tw->contents) ) {
 			continue;
 		}
+		if ( cm_skipBrushShader && b->shaderNum >= 0 && b->shaderNum < cm_skipBrushShaderCount && cm_skipBrushShader[b->shaderNum] ) {
+			continue;
+		}
 
 		if ( tw->sweep.use && b->boundsUsable && !CM_SweepTouchesBox( &tw->sweep, b->bounds[0], b->bounds[1] ) ) {
 			continue;	// the moving volume never reaches this brush
@@ -1079,6 +1085,10 @@ void CM_TraceToLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *
 		}
 
 		if ( !(b->contents & tw->contents) )
+		{
+			continue;
+		}
+		if ( cm_skipBrushShader && b->shaderNum >= 0 && b->shaderNum < cm_skipBrushShaderCount && cm_skipBrushShader[b->shaderNum] )
 		{
 			continue;
 		}
@@ -1574,6 +1584,12 @@ static void CM_TraceActual( trace_t *trace, const vec3_t start, const vec3_t end
 		{
 			CM_TraceThroughTree( &tw, *trace, local, cmod->firstNode, 0, 1, tw.start, tw.end );
 		}
+	}
+
+	// the main map's shared collision (cm_shared.cpp): the world model only
+	if ( model == 0 && local == &cmg ) {
+		CM_SharedTrace( &tw, *trace, start[0] == end[0] && start[1] == end[1] && start[2] == end[2]
+			&& tw.size[0][0] == 0 && tw.size[0][1] == 0 && tw.size[0][2] == 0 );
 	}
 
 	// generate endpos from the original, unmodified start/end

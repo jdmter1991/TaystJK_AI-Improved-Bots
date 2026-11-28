@@ -352,6 +352,9 @@ typedef struct refimport_s {
 	void			*(*VK_GetInstanceProcAddress)		(void);
 	qboolean		(*VK_createSurfaceImpl)				(VkInstance instance, VkSurfaceKHR *surface);
 	void			(*VK_destroyWindow)					(void);
+
+	// a block of 2 GB or more (a big map's planes) - last, so the table above keeps its layout
+	void *			(*Hunk_AllocLarge)					( size_t size, ha_pref preference );
 } refimport_t;
 
 // this is the only function actually exported at the linker level

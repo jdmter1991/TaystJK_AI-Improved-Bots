@@ -64,6 +64,7 @@ set(MPCGameCgameFiles
 	"${MPDir}/cgame/cg_draw.c"
 	"${MPDir}/cgame/cg_drawtools.c"
 	"${MPDir}/cgame/cg_effects.c"
+	"${MPDir}/cgame/cg_mapfx.c"
 	"${MPDir}/cgame/cg_ents.c"
 	"${MPDir}/cgame/cg_event.c"
 	"${MPDir}/cgame/cg_hud.c"

@@ -277,6 +277,9 @@ int CM_PointContents( const vec3_t p, clipHandle_t model ) {
 		}
 	}
 
+	if ( !model ) {
+		contents |= CM_SharedPointContents( p );	// (the main map's shared collision: cm_shared.cpp)
+	}
 	return contents;
 }
 

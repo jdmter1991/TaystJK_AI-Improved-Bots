@@ -992,6 +992,7 @@ void Hunk_SetMark( void );
 qboolean Hunk_CheckMark( void );
 void Hunk_ClearTempMemory( void );
 void *Hunk_AllocateTempMemory( int size );
+void *Hunk_AllocLarge( size_t size, ha_pref preference );	// Hunk_Alloc for 2 GB or more (a big map's collision)
 void Hunk_FreeTempMemory( void *buf );
 int	Hunk_MemoryRemaining( void );
 void Hunk_Log( void);

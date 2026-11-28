@@ -871,6 +871,7 @@ static void SV_InitRef( void ) {
 	ri.Hunk_AllocateTempMemory = Hunk_AllocateTempMemory;
 	ri.Hunk_FreeTempMemory = Hunk_FreeTempMemory;
 	ri.Hunk_Alloc = Hunk_Alloc;
+	ri.Hunk_AllocLarge = Hunk_AllocLarge;
 	ri.Hunk_MemoryRemaining = Hunk_MemoryRemaining;
 	ri.Z_Malloc = Z_Malloc;
 	ri.Z_Free = Z_Free;

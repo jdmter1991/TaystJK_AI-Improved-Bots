@@ -3310,6 +3310,7 @@ Ghoul2 Insert End
 //	CG_LoadingString( "graphics" );
 
 	CG_RegisterGraphics();
+	CG_MapFX_Load();					// the map's ambient effects, played here (maps/<name>.tfx: cg_mapfx.c)
 
 //	CG_LoadingString( "clients" );
 

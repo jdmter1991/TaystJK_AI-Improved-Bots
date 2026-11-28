@@ -263,6 +263,7 @@ if(BuildMPEngine OR BuildMPDed)
 		"${MPDir}/qcommon/cm_polylib.cpp"
 		"${MPDir}/qcommon/cm_polylib.h"
 		"${MPDir}/qcommon/cm_public.h"
+		"${MPDir}/qcommon/cm_shared.cpp"
 		"${MPDir}/qcommon/cm_test.cpp"
 		"${MPDir}/qcommon/cm_trace.cpp"
 		"${MPDir}/qcommon/cmd.cpp"

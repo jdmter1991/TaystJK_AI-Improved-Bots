@@ -1396,7 +1396,7 @@ void		R_Modellist_f ( void );
 //====================================================
 
 
-#define	MAX_DRAWIMAGES			4096
+#define	MAX_DRAWIMAGES			16384	// (descriptors for this many images; a big SWTOR map uses more than 4096)
 #define	MAX_LIGHTMAPS			256
 #define	MAX_SKINS				1024
 

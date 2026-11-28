@@ -2576,6 +2576,11 @@ void fx_runner_link( gentity_t *ent )
 {
 	vec3_t	dir;
 
+	// linked only now, 400 ms in: past the server's settling frames, so it has no baseline in the gamestate (the map's
+	// first message to a client, at most MAX_MSGLEN). It reaches a client in the snapshots, when it is near - a map
+	// with thousands of effects (SWTOR's Dromund Kaas: 2,595) no longer overflows that message
+	trap->LinkEntity( (sharedEntity_t *)ent );
+
 	if ( ent->target && ent->target[0] )
 	{
 		// try to use the target to override the orientation
@@ -2679,13 +2684,11 @@ void SP_fx_runner( gentity_t *ent )
 	ent->think = fx_runner_link;
 	ent->nextthink = level.time + 400;
 
-	// Save our position and link us up!
+	// Save our position (linked in fx_runner_link: no baseline - see there)
 	G_SetOrigin( ent, ent->s.origin );
 
 	VectorSet( ent->r.maxs, FX_ENT_RADIUS, FX_ENT_RADIUS, FX_ENT_RADIUS );
 	VectorScale( ent->r.maxs, -1, ent->r.mins );
-
-	trap->LinkEntity( (sharedEntity_t *)ent );
 }
 
 /*QUAKED fx_wind (0 .5 .8) (-16 -16 -16) (16 16 16) NORMAL CONSTANT GUSTING SWIRLING x  FOG LIGHT_FOG
