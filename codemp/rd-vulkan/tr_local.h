@@ -2000,6 +2000,7 @@ void		R_AddDrawSurf( surfaceType_t *surface, shader_t *shader, int fogIndex, int
 // tr_tworld.cpp: cooked static world drawn next to the BSP
 void		R_LoadTWorld( const char *bspName );
 void		R_AddTWorldSurface( void );
+void		R_TWorldShutdownThreads( void );	// stops the cooked world's worker threads
 void		RB_SurfaceTWorld( void *surface );
 qboolean	R_TWorldEntityLight( trRefEntity_t *ent );
 #ifdef USE_VBO_MDV

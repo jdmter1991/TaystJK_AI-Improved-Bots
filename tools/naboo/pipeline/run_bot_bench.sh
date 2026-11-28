@@ -6,7 +6,8 @@
 # server, where the measure is the server frame time (resolution does not apply).
 # Bots come from the user's own list through the shared helper tools\bot_names.ps1 (read, never edited).
 # A render size larger than the window (4K on a 1440p screen) uses r_renderWidth / r_renderHeight.
-# Refuses to start while another game is running unless ALLOW_BUSY=1.
+# Refuses to start while another game is running unless ALLOW_BUSY=1. BENCH_CMDS="r_tworldStats 1; ..." runs console commands
+# when the bots are in (the command line is full: the engine takes at most 32 "+" commands).
 R="/e/jedi academy modding archive/TaystJK_AI_Claude_Code_improvements"
 D="$R/devgame_naboo"; OUT="$R/naboo/export/city/bench"
 GD="E:\\jedi academy modding archive\\Jedi Academy TaystJK_AI test\\GameData"
@@ -21,7 +22,9 @@ if [ "$1" = "client" ]; then
   bots 31
   # one pass: five camera positions, 3000 frames each; the log's timestamps give the duration
   py - "$D/nicjk/naboo_botbench.cfg" <<'EOF'
-import sys
+import sys, os
+EXTRA = os.environ.get("BENCH_CMDS", "").strip().rstrip(";")
+EXTRA = (EXTRA + "; ") if EXTRA else ""
 P = [(669, 3583, 60, 42), (3031, 4291, 140, -167), (-1693, 1457, 110, 42), (669, 3583, 1400, 42), (700, -9000, 5000, 90), (362, 9000, 400, 90),
      (-672, 8300, 620, 90), (360, 5400, 160, 90)]      # last two: a palace hall with many candles, the palace forecourt
 L = []
@@ -30,7 +33,7 @@ for c in (1, 2):
         nxt = "vstr c%d_p%d" % (c, i + 1) if i + 1 < len(P) else ("vstr c2_p0" if c == 1 else "echo BENCH_END; wait 20; quit")
         # r_tworldBench: every change of the label prints the renderer's frame-time figures of the section that ended
         L.append('set c%d_p%d "r_tworldBench move; setviewpos %d %d %d %d; wait 150; r_tworldBench pass%d_pos%d; echo BENCH_BEGIN pass %d position %d; wait 3000; echo BENCH_STOP pass %d position %d; r_tworldBench move; %s"' % (c, i, x, y, z, yaw, c, i, c, i, c, i, nxt))
-L.append('set benchgo "com_maxfps 125; wait 3500; team s; wait 400; cg_draw2D 1; cg_drawFPS 1; echo BENCH_BOTS_READY; set com_maxfps 0; vstr c1_p0"')
+L.append('set benchgo "com_maxfps 125; wait 3500; team s; wait 400; cg_draw2D 1; cg_drawFPS 1; ' + EXTRA + 'echo BENCH_BOTS_READY; set com_maxfps 0; vstr c1_p0"')
 L.append("vstr benchgo")
 open(sys.argv[1], "w").write("\n".join(L) + "\n")
 EOF

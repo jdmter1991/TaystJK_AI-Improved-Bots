@@ -29,11 +29,151 @@ not apply to placements.
 */
 
 #include "tr_local.h"
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 // CPU time of the cooked-world pass per section, summed between two statistics lines (r_tworldStats)
 static double s_twTime[4];
 static inline double TW_Now( void ) { return std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now().time_since_epoch() ).count(); }
+
+/*
+Worker pool for the cooked world's per-frame CPU work (r_tworldThreads). A job set is a function and a job count;
+the calling thread and the workers take job numbers from one counter until none are left, and the call returns when
+every job has finished. Jobs write only their own output ranges, so the result does not depend on which thread ran
+which job or in what order. Threads are started once (and again only when r_tworldThreads changes), nothing is
+allocated per frame, and the pool stops before the renderer is unloaded (R_TWorldShutdownThreads).
+*/
+#define TW_MAX_THREADS	16
+#define TW_CULL_JOBS	32		// culling jobs per view: several per thread, so threads that finish early take more
+#define TW_FILL_JOBS	16		// instance-data jobs per pass at most (two per thread)
+
+typedef void ( *twJobFunc_t )( void *ctx, int job );
+
+static struct {
+	std::thread					threads[TW_MAX_THREADS];
+	int							numThreads;
+	std::mutex					lock;
+	std::condition_variable		wake, finished;
+	unsigned					generation;		// bumped for every job set
+	qboolean					quit;
+	twJobFunc_t					func;
+	void						*ctx;
+	std::atomic<int>			numJobs;
+	std::atomic<int>			nextJob;
+	int							jobsDone;		// under lock
+} s_twPool;
+
+static void TW_PoolRunJobs( void ) {
+	int done = 0, job;
+	while ( ( job = s_twPool.nextJob.fetch_add( 1 ) ) < s_twPool.numJobs.load() ) {
+		s_twPool.func( s_twPool.ctx, job );
+		done++;
+	}
+	if ( done ) {
+		std::lock_guard<std::mutex> g( s_twPool.lock );
+		s_twPool.jobsDone += done;
+		if ( s_twPool.jobsDone >= s_twPool.numJobs.load() )
+			s_twPool.finished.notify_one();
+	}
+}
+
+static void TW_PoolWorker( void ) {
+	unsigned seen = 0;
+	for ( ;; ) {
+		{
+			std::unique_lock<std::mutex> g( s_twPool.lock );
+			s_twPool.wake.wait( g, [&] { return s_twPool.quit || s_twPool.generation != seen; } );
+			if ( s_twPool.quit )
+				return;
+			seen = s_twPool.generation;
+		}
+		TW_PoolRunJobs();
+	}
+}
+
+static void TW_PoolStop( void ) {
+	int i;
+	if ( !s_twPool.numThreads )
+		return;
+	{
+		std::lock_guard<std::mutex> g( s_twPool.lock );
+		s_twPool.quit = qtrue;
+	}
+	s_twPool.wake.notify_all();
+	for ( i = 0; i < s_twPool.numThreads; i++ ) {
+		if ( s_twPool.threads[i].joinable() )
+			s_twPool.threads[i].join();
+	}
+	s_twPool.numThreads = 0;
+	s_twPool.quit = qfalse;
+}
+
+// worker threads besides the calling one: n < 0 = automatic (hardware threads - 1, at most 7), 0 = none
+static int TW_PoolResolve( int n ) {
+	if ( n < 0 ) {
+		const unsigned hw = std::thread::hardware_concurrency();
+		n = hw > 1 ? (int)hw - 1 : 0;
+		if ( n > 7 )
+			n = 7;
+	}
+	return n > TW_MAX_THREADS ? TW_MAX_THREADS : n;
+}
+
+static void TW_PoolSize( int n ) {
+	int i;
+	n = TW_PoolResolve( n );
+	if ( n == s_twPool.numThreads )
+		return;
+	TW_PoolStop();
+	for ( i = 0; i < n; i++ ) {
+		try {
+			s_twPool.threads[i] = std::thread( TW_PoolWorker );
+		} catch ( ... ) {
+			break;			// could not start a thread: work with the ones there are
+		}
+		s_twPool.numThreads++;
+	}
+}
+
+// runs func( ctx, 0 .. numJobs - 1 ) on the calling thread and the workers; returns when all have finished
+static void TW_PoolRun( twJobFunc_t func, void *ctx, int numJobs ) {
+	int i;
+	if ( numJobs <= 0 )
+		return;
+	if ( !s_twPool.numThreads || numJobs == 1 ) {
+		for ( i = 0; i < numJobs; i++ )
+			func( ctx, i );
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> g( s_twPool.lock );
+		s_twPool.func = func;
+		s_twPool.ctx = ctx;
+		s_twPool.numJobs.store( numJobs );
+		s_twPool.nextJob.store( 0 );
+		s_twPool.jobsDone = 0;
+		s_twPool.generation++;
+	}
+	s_twPool.wake.notify_all();
+	TW_PoolRunJobs();
+	std::unique_lock<std::mutex> g( s_twPool.lock );
+	s_twPool.finished.wait( g, [] { return s_twPool.jobsDone >= s_twPool.numJobs.load(); } );
+}
+
+#ifdef USE_VBO_MDV
+static void TW_CheckFree( void );
+#endif
+
+// stop the workers before the renderer is unloaded (RE_Shutdown)
+void R_TWorldShutdownThreads( void ) {
+	TW_PoolStop();
+#ifdef USE_VBO_MDV
+	TW_CheckFree();
+#endif
+}
 
 #ifdef USE_VBO_MDV
 
@@ -167,6 +307,12 @@ typedef struct tworld_s {
 	byte			*sortLod;
 	int				*drawList;		// submeshes with something to draw in this pass, nearest first
 	struct twCullRec_s	*cullRecs;	// one compact record per placement, in cell order
+	// the culling split into jobs (r_tworldThreads): job j tests cells cullJobFirst[j] .. cullJobFirst[j + 1] - 1 and
+	// writes its placements at the first record index of its cells; the sort reads the jobs' results in job order
+	int				numCullJobs;
+	int				cullJobFirst[TW_CULL_JOBS + 1];
+	int				cullJobBase[TW_CULL_JOBS], cullJobCount[TW_CULL_JOBS], cullJobSmall[TW_CULL_JOBS];
+	int				*fillCount;		// TW_FILL_JOBS rows of numSubs + 1: records per job and material range, then each job's first position
 	// interior visibility (maps/<name>.tportal): an axis-aligned interior box and the openings out of it
 	qboolean		hasPortal;
 	vec3_t			portalMins, portalMaxs;
@@ -229,6 +375,8 @@ static cvar_t	*r_tworldLodSize1;
 static cvar_t	*r_tworldLodSize2;
 static cvar_t	*r_tworldLight;
 static cvar_t	*r_tworldInstancing;
+static cvar_t	*r_tworldThreads;
+static cvar_t	*r_tworldThreadsCheck;
 static cvar_t	*r_tworldShadows;
 static cvar_t	*r_tworldShadowOffset;
 static cvar_t	*r_tworldShadowBias;
@@ -327,7 +475,22 @@ static void TW_BuildCells( tworld_t *tw )
 		tw->cullRecs[i].numLods = (short)tw->meshes[in->mesh].numLods;
 		tw->cullRecs[i].mesh = in->mesh;
 	}
-	ri.Printf( PRINT_ALL, "R_LoadTWorld: %i placements in %i culling cells\n", n, numCells );
+	{
+		// culling jobs: runs of whole cells with about the same number of placements each
+		int job = 0, acc = 0;
+		const int per = ( n + TW_CULL_JOBS - 1 ) / TW_CULL_JOBS;
+		tw->cullJobFirst[0] = 0;
+		for ( c = 0; c < numCells - 1 && job < TW_CULL_JOBS - 1; c++ ) {
+			acc += tw->cells[c].count;
+			if ( acc >= per * ( job + 1 ) )
+				tw->cullJobFirst[++job] = c + 1;
+		}
+		tw->numCullJobs = job + 1;
+		tw->cullJobFirst[tw->numCullJobs] = numCells;
+		for ( job = 0; job < tw->numCullJobs; job++ )
+			tw->cullJobBase[job] = tw->cells[tw->cullJobFirst[job]].first;
+	}
+	ri.Printf( PRINT_ALL, "R_LoadTWorld: %i placements in %i culling cells, %i culling jobs\n", n, numCells, tw->numCullJobs );
 }
 
 static const tworldSub_t *s_sortSubs;
@@ -647,6 +810,8 @@ void R_LoadTWorld( const char *bspName )
 	r_tworldLampDistance = ri.Cvar_Get( "r_tworldLampDistance", "4000", CVAR_ARCHIVE_ND, "Cooked world: lamp light is drawn up to this distance from the camera (world units), fading over the last quarter; 0 = no limit" );
 	r_tworldLampDebug = ri.Cvar_Get( "r_tworldLampDebug", "0", CVAR_TEMP, "Cooked world: lamp debug view, 1 = no occlusion test, 2 = placements with lamps in red" );
 	r_tworldInstancing = ri.Cvar_Get( "r_tworldInstancing", "1", CVAR_ARCHIVE_ND, "Cooked world: 1 = one instanced draw per mesh level and material, 0 = one draw per placement through the model path" );
+	r_tworldThreads = ri.Cvar_Get( "r_tworldThreads", "-1", CVAR_ARCHIVE_ND, "Cooked world: worker threads for the per-frame culling and instance data, besides the main thread; -1 = automatic (hardware threads - 1, at most 7), 0 = single-threaded" );
+	r_tworldThreadsCheck = ri.Cvar_Get( "r_tworldThreadsCheck", "0", CVAR_TEMP, "Cooked world debug: every frame, compare the threaded culling and instance data with the one-thread path; r_tworldStats prints the result" );
 
 	COM_StripExtension( bspName, name, sizeof( name ) );
 	Q_strcat( name, sizeof( name ), ".tworld" );
@@ -794,6 +959,7 @@ void R_LoadTWorld( const char *bspName )
 	tw->batchStart = tw->batchCount + h->numSubmeshes + 1;
 	tw->batchCursor = tw->batchStart + h->numSubmeshes + 1;
 	tw->subOrder = (int *)ri.Hunk_Alloc( sizeof( int ) * ( h->numSubmeshes + 1 ), h_low );
+	tw->fillCount = (int *)ri.Hunk_Alloc( sizeof( int ) * ( h->numSubmeshes + 1 ) * TW_FILL_JOBS, h_low );
 	tw->blendSurfaceType = SF_TWORLD;
 
 	// optional second UV set (maps/<name>.tuv2): "TUV2", version 1, count, then per entry the mesh index, its vertex
@@ -1080,6 +1246,278 @@ typedef struct {
 	float	lamps[4];		// lamps that reach the placement: two indices + 1 per value (a + 4096 * b), 0 = none
 } twInstData_t;				// 96 bytes (vk_pipelines.cpp: the instance binding's stride)
 
+// r_tworldThreadsCheck: the threaded results compared with the one-thread path every frame (a debug aid; the scratch
+// buffers exist only while it is on)
+static struct {
+	int				*inst, *mesh;
+	byte			*lod;
+	int				capInst;
+	twInstData_t	*data;
+	int				capData;
+	int				cullViews, cullBad, fillPasses, fillBad;
+} s_twCheck;
+
+static qboolean TW_CheckAlloc( const int numInst, const int numRecords ) {
+	if ( numInst > s_twCheck.capInst ) {
+		if ( s_twCheck.inst ) {
+			Z_Free( s_twCheck.inst ); Z_Free( s_twCheck.mesh ); Z_Free( s_twCheck.lod );
+		}
+		s_twCheck.inst = (int *)Z_Malloc( sizeof( int ) * numInst, TAG_GENERAL, qfalse );
+		s_twCheck.mesh = (int *)Z_Malloc( sizeof( int ) * numInst, TAG_GENERAL, qfalse );
+		s_twCheck.lod = (byte *)Z_Malloc( numInst, TAG_GENERAL, qfalse );
+		s_twCheck.capInst = numInst;
+	}
+	if ( numRecords > s_twCheck.capData ) {
+		if ( s_twCheck.data )
+			Z_Free( s_twCheck.data );
+		s_twCheck.capData = numRecords + numRecords / 2;
+		s_twCheck.data = (twInstData_t *)Z_Malloc( sizeof( twInstData_t ) * s_twCheck.capData, TAG_GENERAL, qfalse );
+	}
+	return qtrue;
+}
+
+static void TW_CheckFree( void ) {
+	if ( s_twCheck.inst ) {
+		Z_Free( s_twCheck.inst ); Z_Free( s_twCheck.mesh ); Z_Free( s_twCheck.lod );
+	}
+	if ( s_twCheck.data )
+		Z_Free( s_twCheck.data );
+	Com_Memset( &s_twCheck, 0, sizeof( s_twCheck ) );
+}
+
+// one placement's record for one material range of the instanced path
+static inline void TW_WriteInstRecord( const tworld_t *tw, twInstData_t *out, const int instIndex, const tworldMesh_t *mesh, const tworldSub_t *sub, const float *m, const qboolean usePbr )
+{
+	out->row0[0] = m[0]; out->row0[1] = m[4]; out->row0[2] = m[8];  out->row0[3] = m[12];
+	out->row1[0] = m[1]; out->row1[1] = m[5]; out->row1[2] = m[9];  out->row1[3] = m[13];
+	out->row2[0] = m[2]; out->row2[1] = m[6]; out->row2[2] = m[10]; out->row2[3] = m[14];
+	VectorCopy( tw->tints[sub->tintIndex], out->tint );
+	out->tint[3] = tw->alphas[sub->tintIndex];
+	out->params[0] = tw->details[sub->tintIndex];
+	out->params[1] = sub->texNoScale + tw->tilePacks[sub->tintIndex];
+	if ( tw->instLamps ) {
+		const float *il = tw->instLamps[instIndex];
+		out->lamps[0] = il[0]; out->lamps[1] = il[1]; out->lamps[2] = il[2]; out->lamps[3] = il[3];
+	} else {
+		out->lamps[0] = out->lamps[1] = out->lamps[2] = out->lamps[3] = 0.0f;
+	}
+	// animation type, plus the placement's sky occlusion in the fraction (0 .. 0.98)
+	out->params[2] = (float)tw->anims[sub->tintIndex] + ( tw->skyOcc ? tw->skyOcc[instIndex] * ( 0.98f / 255.0f ) : 0.0f );
+	if ( tw->anims[sub->tintIndex] == 0 || tw->anims[sub->tintIndex] >= 6 ) {
+		// physically based path: packed material values; a normal map takes the second texture slot
+		out->params[3] = tw->pbrPacks[sub->tintIndex];
+		if ( usePbr && out->params[0] <= 0.0f && tw->pbrImages[sub->tintIndex] && ( (int)tw->tilePacks[sub->tintIndex] >> 10 ) != 254 )
+			out->params[0] = -tw->pbrScales[sub->tintIndex];
+	}
+	else if ( tw->anims[sub->tintIndex] == 4 )
+		out->params[3] = sub->shader->stages[1] ? 1.0f : 0.0f;		// foam: a second noise texture is present
+	else
+		out->params[3] = ( tw->anims[sub->tintIndex] == 3 ) ? mesh->zmax : mesh->zmin;
+}
+
+// the instance-data job: visible placements job * chunk .. (job + 1) * chunk - 1, written at the cursors counted for this job
+typedef struct {
+	const tworld_t	*tw;
+	twInstData_t	*data;
+	int				pass, numVis, chunk, stride;
+	qboolean		usePbr;
+} twFillCtx_t;
+
+static void TW_FillJob( void *ctx, int job )
+{
+	const twFillCtx_t	*c = (const twFillCtx_t *)ctx;
+	const tworld_t		*tw = c->tw;
+	int					*cursor = tw->fillCount + job * c->stride;
+	const int			end = ( job + 1 ) * c->chunk < c->numVis ? ( job + 1 ) * c->chunk : c->numVis;
+	int					i, j;
+
+	for ( i = job * c->chunk; i < end; i++ ) {
+		const tworldInst_t *inst = &tw->instances[tw->visInst[i]];
+		const tworldMesh_t *mesh = &tw->meshes[inst->mesh];
+		const int lod = tw->visLod[i];
+		for ( j = 0; j < mesh->lodNumSubs[lod]; j++ ) {
+			const int s = mesh->lodFirstSub[lod] + j;
+			const tworldSub_t *sub = &tw->subs[s];
+			if ( sub->pass != c->pass || !sub->surf.numIndexes )
+				continue;
+			TW_WriteInstRecord( tw, &c->data[cursor[s]++], tw->visInst[i], mesh, sub, inst->matrix, c->usePbr );
+		}
+	}
+}
+
+// the view tests of one view (pass 0), shared by every culling job
+typedef struct {
+	tworld_t		*tw;
+	const cplane_t	*frustum;
+	const float		*viewOrg;
+	const float		**act;		// openings that count for this view
+	int				numAct;
+	qboolean		cull, inside;
+	float			cullSize, kCull, kLod1, kLod2;
+} twCullCtx_t;
+
+/*
+Tests the placements of cells cellFirst .. cellEnd - 1 against the view and writes the ones that pass, with their
+detail level and distance bucket, to sortInst / sortMesh / sortLod / visKey from index outBase on (the first record
+index of those cells, so jobs never overlap). Returns how many it wrote; *smallOut counts the ones too small to draw.
+*/
+static int TW_CullCells( const twCullCtx_t *c, const int cellFirst, const int cellEnd, const int outBase, int *smallOut )
+{
+	tworld_t		*tw = c->tw;
+	const cplane_t	*frustum = c->frustum;
+	const float		*viewOrg = c->viewOrg;
+	const float		**act = c->act;
+	const int		numAct = c->numAct;
+	const qboolean	cull = c->cull, inside = c->inside;
+	const float		cullSize = c->cullSize, kCull = c->kCull, kLod1 = c->kLod1, kLod2 = c->kLod2;
+	int				ci, k, p, n = 0, nSmall = 0;
+
+	for ( ci = cellFirst; ci < cellEnd; ci++ ) {
+		const twCell_t *cell = &tw->cells[ci];
+		const twCullRec_t *rec = &tw->cullRecs[cell->first];
+		qboolean testEach = cull;			// qfalse when the whole cell lies inside the view
+		if ( cull ) {
+			vec3_t cd;
+			float cdist;
+			float minSide = 1e30f;
+			for ( p = 0; p < 4; p++ ) {
+				const float side = DotProduct( cell->center, frustum[p].normal ) - frustum[p].dist;
+				if ( side < -cell->radius )
+					break;
+				if ( side < minSide )
+					minSide = side;
+			}
+			if ( p < 4 )
+				continue;
+			if ( minSide > cell->radius )
+				testEach = qfalse;
+			// too far for even the largest placement of the cell to pass the size test
+			VectorSubtract( cell->center, viewOrg, cd );
+			cdist = VectorLength( cd ) - cell->radius;
+			if ( cdist > 1.0f && cell->maxInstRadius < cullSize * cdist ) {
+				nSmall += cell->count;
+				continue;
+			}
+		}
+		if ( inside && cell->maxInstRadius < 1500.0f ) {
+			// a whole cell outside the interior that cannot be seen through any opening
+			const float m = cell->radius + 150.0f;
+			if ( cell->center[0] < tw->portalMins[0] - m || cell->center[0] > tw->portalMaxs[0] + m
+				|| cell->center[1] < tw->portalMins[1] - m || cell->center[1] > tw->portalMaxs[1] + m ) {
+				vec3_t cd2;
+				int pi;
+				VectorSubtract( cell->center, viewOrg, cd2 );
+				for ( pi = 0; pi < numAct; pi++ ) {
+					const float *po = act[pi];
+					const int ax = ( po[0] > 0.5f ) ? 1 : 0, ox = 1 - ax;
+					float tt, grow;
+					if ( fabsf( cd2[ax] ) < 1e-3f )
+						break;				// cannot tell: keep the cell
+					tt = ( po[1] - viewOrg[ax] ) / cd2[ax];
+					if ( tt <= 0.0f )
+						continue;
+					if ( tt > 1.0f )
+						tt = 1.0f;
+					grow = cell->radius * tt + 16.0f;
+					if ( fabsf( viewOrg[ox] + cd2[ox] * tt - po[2] ) < po[4] + grow )
+						break;
+				}
+				if ( pi == numAct ) {
+					nSmall += cell->count;
+					continue;
+				}
+			}
+		}
+		for ( k = 0; k < cell->count; k++, rec++ ) {
+			vec3_t	d;
+			float	d2, t;
+			int		lod = 0;
+
+			if ( testEach ) {
+				for ( p = 0; p < 4; p++ ) {
+					if ( DotProduct( rec->center, frustum[p].normal ) - frustum[p].dist < -rec->radius )
+						break;
+				}
+				if ( p < 4 )
+					continue;
+			}
+			VectorSubtract( rec->center, viewOrg, d );
+			// (placements that are themselves enclosed belong to the interior wherever they stand)
+			if ( inside && rec->radius < 1500.0f && !( tw->skyOcc && tw->skyOcc[rec->inst] >= 120 ) ) {
+				const float m = rec->radius + 150.0f;
+				if ( rec->center[0] < tw->portalMins[0] - m || rec->center[0] > tw->portalMaxs[0] + m
+					|| rec->center[1] < tw->portalMins[1] - m || rec->center[1] > tw->portalMaxs[1] + m
+					|| rec->center[2] < tw->portalMins[2] - m || rec->center[2] > tw->portalMaxs[2] + m ) {
+					// outside the interior: visible only through an opening. The line from the eye to the placement
+					// must cross the opening's plane inside its rectangle, grown by the placement's radius.
+					int pi;
+					for ( pi = 0; pi < numAct; pi++ ) {
+						const float *po = act[pi];
+						const int ax = ( po[0] > 0.5f ) ? 1 : 0, ox = 1 - ax;
+						const float den = d[ax];
+						float tt, hx, hz, grow;
+						if ( fabsf( den ) < 1e-3f )
+							continue;
+						tt = ( po[1] - viewOrg[ax] ) / den;
+						if ( tt <= 0.0f || tt > 1.0f )
+							continue;
+						grow = rec->radius * tt + 16.0f;
+						hx = viewOrg[ox] + d[ox] * tt - po[2];
+						hz = viewOrg[2] + d[2] * tt - po[3];
+						if ( fabsf( hx ) < po[4] + grow && fabsf( hz ) < po[5] + grow )
+							break;
+					}
+					if ( pi == numAct ) {
+						nSmall++;
+						continue;
+					}
+				}
+			}
+			d2 = DotProduct( d, d );
+			t = rec->radius + 1.0f;
+			if ( d2 > t * t ) {
+				t = rec->radius * kCull;
+				if ( kCull > 0.0f && d2 > t * t ) {
+					nSmall++;
+					continue;
+				}
+				t = rec->radius * kLod2;
+				if ( rec->numLods > 2 && d2 > t * t )
+					lod = 2;
+				else {
+					t = rec->radius * kLod1;
+					if ( rec->numLods > 1 && d2 > t * t )
+						lod = 1;
+				}
+			}
+			{
+				const int at = outBase + n;
+				// bucket = exponent of the squared distance to the placement's near side, two buckets per doubling
+				float nearD = sqrtf( d2 ) - rec->radius;
+				uint32_t bits;
+				int b;
+				tw->sortInst[at] = rec->inst;
+				tw->sortMesh[at] = rec->mesh;
+				tw->sortLod[at] = (byte)lod;
+				if ( nearD < 1.0f ) nearD = 1.0f;
+				Com_Memcpy( &bits, &nearD, 4 );
+				b = (int)( bits >> 22 ) - ( 127 << 1 );
+				tw->visKey[at] = (uint32_t)( b < 0 ? 0 : ( b > 63 ? 63 : b ) );
+			}
+			n++;
+		}
+	}
+	*smallOut = nSmall;
+	return n;
+}
+
+static void TW_CullJob( void *ctx, int job )
+{
+	const twCullCtx_t *c = (const twCullCtx_t *)ctx;
+	tworld_t *tw = c->tw;
+	tw->cullJobCount[job] = TW_CullCells( c, tw->cullJobFirst[job], tw->cullJobFirst[job + 1], tw->cullJobBase[job], &tw->cullJobSmall[job] );
+}
+
 static qboolean RB_TWorldInstanced( tworld_t *tw, const int pass )
 {
 	const cplane_t	*frustum = backEnd.viewParms.frustum;
@@ -1148,157 +1586,76 @@ static qboolean RB_TWorldInstanced( tworld_t *tw, const int pass )
 			for ( q = 0; q < nw; q++ )
 				act[numAct++] = tw->portals[wi[q]];
 		}
-		for ( ci = 0; ci < tw->numCells; ci++ ) {
-			const twCell_t *cell = &tw->cells[ci];
-			const twCullRec_t *rec = &tw->cullRecs[cell->first];
-			qboolean testEach = cull;			// qfalse when the whole cell lies inside the view
-			if ( cull ) {
-				vec3_t cd;
-				float cdist;
-				float minSide = 1e30f;
-				for ( p = 0; p < 4; p++ ) {
-					const float side = DotProduct( cell->center, frustum[p].normal ) - frustum[p].dist;
-					if ( side < -cell->radius )
-						break;
-					if ( side < minSide )
-						minSide = side;
-				}
-				if ( p < 4 )
-					continue;
-				if ( minSide > cell->radius )
-					testEach = qfalse;
-				// too far for even the largest placement of the cell to pass the size test
-				VectorSubtract( cell->center, viewOrg, cd );
-				cdist = VectorLength( cd ) - cell->radius;
-				if ( cdist > 1.0f && cell->maxInstRadius < cullSize * cdist ) {
-					tw->c_small += cell->count;
-					continue;
-				}
-			}
-			if ( inside && cell->maxInstRadius < 1500.0f ) {
-				// a whole cell outside the interior that cannot be seen through any opening
-				const float m = cell->radius + 150.0f;
-				if ( cell->center[0] < tw->portalMins[0] - m || cell->center[0] > tw->portalMaxs[0] + m
-					|| cell->center[1] < tw->portalMins[1] - m || cell->center[1] > tw->portalMaxs[1] + m ) {
-					vec3_t cd2;
-					int pi;
-					VectorSubtract( cell->center, viewOrg, cd2 );
-					for ( pi = 0; pi < numAct; pi++ ) {
-						const float *po = act[pi];
-						const int ax = ( po[0] > 0.5f ) ? 1 : 0, ox = 1 - ax;
-						float tt, grow;
-						if ( fabsf( cd2[ax] ) < 1e-3f )
-							break;				// cannot tell: keep the cell
-						tt = ( po[1] - viewOrg[ax] ) / cd2[ax];
-						if ( tt <= 0.0f )
-							continue;
-						if ( tt > 1.0f )
-							tt = 1.0f;
-						grow = cell->radius * tt + 16.0f;
-						if ( fabsf( viewOrg[ox] + cd2[ox] * tt - po[2] ) < po[4] + grow )
-							break;
-					}
-					if ( pi == numAct ) {
-						tw->c_small += cell->count;
-						continue;
-					}
-				}
-			}
-			for ( k = 0; k < cell->count; k++, rec++ ) {
-				vec3_t	d;
-				float	d2, t;
-				int		lod = 0;
-
-				if ( testEach ) {
-					for ( p = 0; p < 4; p++ ) {
-						if ( DotProduct( rec->center, frustum[p].normal ) - frustum[p].dist < -rec->radius )
-							break;
-					}
-					if ( p < 4 )
-						continue;
-				}
-				VectorSubtract( rec->center, viewOrg, d );
-				// (placements that are themselves enclosed belong to the interior wherever they stand)
-				if ( inside && rec->radius < 1500.0f && !( tw->skyOcc && tw->skyOcc[rec->inst] >= 120 ) ) {
-					const float m = rec->radius + 150.0f;
-					if ( rec->center[0] < tw->portalMins[0] - m || rec->center[0] > tw->portalMaxs[0] + m
-						|| rec->center[1] < tw->portalMins[1] - m || rec->center[1] > tw->portalMaxs[1] + m
-						|| rec->center[2] < tw->portalMins[2] - m || rec->center[2] > tw->portalMaxs[2] + m ) {
-						// outside the interior: visible only through an opening. The line from the eye to the placement
-						// must cross the opening's plane inside its rectangle, grown by the placement's radius.
-						int pi;
-						for ( pi = 0; pi < numAct; pi++ ) {
-							const float *po = act[pi];
-							const int ax = ( po[0] > 0.5f ) ? 1 : 0, ox = 1 - ax;
-							const float den = d[ax];
-							float tt, hx, hz, grow;
-							if ( fabsf( den ) < 1e-3f )
-								continue;
-							tt = ( po[1] - viewOrg[ax] ) / den;
-							if ( tt <= 0.0f || tt > 1.0f )
-								continue;
-							grow = rec->radius * tt + 16.0f;
-							hx = viewOrg[ox] + d[ox] * tt - po[2];
-							hz = viewOrg[2] + d[2] * tt - po[3];
-							if ( fabsf( hx ) < po[4] + grow && fabsf( hz ) < po[5] + grow )
-								break;
-						}
-						if ( pi == numAct ) {
-							tw->c_small++;
-							continue;
-						}
-					}
-				}
-				d2 = DotProduct( d, d );
-				t = rec->radius + 1.0f;
-				if ( d2 > t * t ) {
-					t = rec->radius * kCull;
-					if ( kCull > 0.0f && d2 > t * t ) {
-						tw->c_small++;
-						continue;
-					}
-					t = rec->radius * kLod2;
-					if ( rec->numLods > 2 && d2 > t * t )
-						lod = 2;
-					else {
-						t = rec->radius * kLod1;
-						if ( rec->numLods > 1 && d2 > t * t )
-							lod = 1;
-					}
-				}
-				tw->sortInst[nAll] = rec->inst;
-				tw->sortMesh[nAll] = rec->mesh;
-				tw->sortLod[nAll] = (byte)lod;
-				{
-					// bucket = exponent of the squared distance to the placement's near side, two buckets per doubling
-					float nearD = sqrtf( d2 ) - rec->radius;
-					uint32_t bits;
-					int b;
-					if ( nearD < 1.0f ) nearD = 1.0f;
-					Com_Memcpy( &bits, &nearD, 4 );
-					b = (int)( bits >> 22 ) - ( 127 << 1 );
-					tw->visKey[nAll] = (uint32_t)( b < 0 ? 0 : ( b > 63 ? 63 : b ) );
-				}
-				nAll++;
-			}
-		}
 		{
-			// counting sort, nearest first
-			int cnt[65], b;
+			// the view tests: on the worker threads in jobs of whole cells (r_tworldThreads), or in one run here
+			twCullCtx_t	cc;
+			int			numJobs = 1, jb, b;
+			int			cnt[65];
+			cc.tw = tw; cc.frustum = frustum; cc.viewOrg = viewOrg; cc.act = act; cc.numAct = numAct;
+			cc.cull = cull; cc.inside = inside; cc.cullSize = cullSize; cc.kCull = kCull; cc.kLod1 = kLod1; cc.kLod2 = kLod2;
+			TW_PoolSize( r_tworldThreads->integer );
+			if ( s_twPool.numThreads && tw->numCullJobs > 1 ) {
+				numJobs = tw->numCullJobs;
+				TW_PoolRun( TW_CullJob, &cc, numJobs );
+			} else {
+				tw->cullJobBase[0] = 0;
+				tw->cullJobCount[0] = TW_CullCells( &cc, 0, tw->numCells, 0, &tw->cullJobSmall[0] );
+			}
+			// counting sort, nearest first, over the jobs' results in job order (the order of the cells)
 			Com_Memset( cnt, 0, sizeof( cnt ) );
-			for ( k = 0; k < nAll; k++ )
-				cnt[tw->visKey[k] + 1]++;
+			for ( jb = 0; jb < numJobs; jb++ ) {
+				const int base = tw->cullJobBase[jb], end = base + tw->cullJobCount[jb];
+				for ( k = base; k < end; k++ )
+					cnt[tw->visKey[k] + 1]++;
+				nAll += tw->cullJobCount[jb];
+				tw->c_small += tw->cullJobSmall[jb];
+			}
 			for ( b = 1; b < 65; b++ )
 				cnt[b] += cnt[b - 1];
-			for ( k = 0; k < nAll; k++ ) {
-				const int at = cnt[tw->visKey[k]]++;
-				tw->visAllInst[at] = tw->sortInst[k];
-				tw->visAllMesh[at] = tw->sortMesh[k];
-				tw->visAllLod[at] = tw->sortLod[k];
+			for ( jb = 0; jb < numJobs; jb++ ) {
+				const int base = tw->cullJobBase[jb], end = base + tw->cullJobCount[jb];
+				for ( k = base; k < end; k++ ) {
+					const int at = cnt[tw->visKey[k]]++;
+					tw->visAllInst[at] = tw->sortInst[k];
+					tw->visAllMesh[at] = tw->sortMesh[k];
+					tw->visAllLod[at] = tw->sortLod[k];
+				}
+			}
+			if ( numJobs > 1 && r_tworldThreadsCheck->integer && TW_CheckAlloc( tw->numInstances + 1, 0 ) ) {
+				// debug: the same view tests in one run, compared with the jobs' result (placements, order, levels)
+				int sm = 0, nRef, bad = 0;
+				nRef = TW_CullCells( &cc, 0, tw->numCells, 0, &sm );
+				Com_Memset( cnt, 0, sizeof( cnt ) );
+				for ( k = 0; k < nRef; k++ )
+					cnt[tw->visKey[k] + 1]++;
+				for ( b = 1; b < 65; b++ )
+					cnt[b] += cnt[b - 1];
+				for ( k = 0; k < nRef; k++ ) {
+					const int at = cnt[tw->visKey[k]]++;
+					s_twCheck.inst[at] = tw->sortInst[k];
+					s_twCheck.mesh[at] = tw->sortMesh[k];
+					s_twCheck.lod[at] = tw->sortLod[k];
+				}
+				if ( nRef != nAll || sm != tw->c_small ) {
+					bad = 1;
+				} else {
+					for ( k = 0; k < nAll && !bad; k++ )
+						bad = ( s_twCheck.inst[k] != tw->visAllInst[k] || s_twCheck.mesh[k] != tw->visAllMesh[k] || s_twCheck.lod[k] != tw->visAllLod[k] );
+				}
+				s_twCheck.cullViews++;
+				s_twCheck.cullBad += bad;
 			}
 		}
 		tw->numVisAll = nAll;
 	}
+
+	// the instance data written in jobs on the worker threads (r_tworldThreads): the visible placements split into runs
+	// of fillChunk; each job writes its run's records at positions counted here, exactly where the one-thread loop
+	// below would put them
+	const int		fillStride = tw->numSubs + 1;
+	const int		fillJobs = ( s_twPool.numThreads && tw->fillCount && tw->numVisAll >= 2048 )
+							? ( ( s_twPool.numThreads + 1 ) * 2 < TW_FILL_JOBS ? ( s_twPool.numThreads + 1 ) * 2 : TW_FILL_JOBS ) : 0;
+	const int		fillChunk = fillJobs ? ( tw->numVisAll + fillJobs - 1 ) / fillJobs : 0;
 
 	// this pass: the placements whose mesh has something to draw in it
 	for ( k = 0; k < tw->numVisAll; k++ ) {
@@ -1309,6 +1666,7 @@ static qboolean RB_TWorldInstanced( tworld_t *tw, const int pass )
 		if ( !( mesh->lodPassMask[lod] & ( 1 << pass ) ) )
 			continue;
 
+		int *fillRow = fillJobs ? tw->fillCount + ( numVis / fillChunk ) * fillStride : NULL;
 		tw->visInst[numVis] = i;
 		tw->visLod[numVis] = (byte)lod;
 		numVis++;
@@ -1316,8 +1674,16 @@ static qboolean RB_TWorldInstanced( tworld_t *tw, const int pass )
 		for ( j = 0; j < mesh->lodNumSubs[lod]; j++ ) {
 			const int s = mesh->lodFirstSub[lod] + j;
 			if ( tw->subs[s].pass == pass && tw->subs[s].surf.numIndexes ) {
-				if ( tw->batchCount[s]++ == 0 )
+				if ( tw->batchCount[s]++ == 0 ) {
 					tw->drawList[numDrawList++] = s;		// first seen = nearest
+					if ( fillJobs ) {
+						int fj;
+						for ( fj = 0; fj < fillJobs; fj++ )
+							tw->fillCount[fj * fillStride + s] = 0;
+					}
+				}
+				if ( fillRow )
+					fillRow[s]++;
 				total++;
 			}
 		}
@@ -1459,46 +1825,50 @@ static qboolean RB_TWorldInstanced( tworld_t *tw, const int pass )
 		run += tw->batchCount[i];
 	}
 
-	for ( i = 0; i < numVis; i++ ) {
-		const tworldInst_t *inst = &tw->instances[tw->visInst[i]];
-		const tworldMesh_t *mesh = &tw->meshes[inst->mesh];
-		const int lod = tw->visLod[i];
-		const float *m = inst->matrix;
-
-		for ( j = 0; j < mesh->lodNumSubs[lod]; j++ ) {
-			const int s = mesh->lodFirstSub[lod] + j;
-			const tworldSub_t *sub = &tw->subs[s];
-			twInstData_t *out;
-
-			if ( sub->pass != pass || !sub->surf.numIndexes )
-				continue;
-
-			out = &data[tw->batchCursor[s]++];
-			out->row0[0] = m[0]; out->row0[1] = m[4]; out->row0[2] = m[8];  out->row0[3] = m[12];
-			out->row1[0] = m[1]; out->row1[1] = m[5]; out->row1[2] = m[9];  out->row1[3] = m[13];
-			out->row2[0] = m[2]; out->row2[1] = m[6]; out->row2[2] = m[10]; out->row2[3] = m[14];
-			VectorCopy( tw->tints[sub->tintIndex], out->tint );
-			out->tint[3] = tw->alphas[sub->tintIndex];
-			out->params[0] = tw->details[sub->tintIndex];
-			out->params[1] = sub->texNoScale + tw->tilePacks[sub->tintIndex];
-			if ( tw->instLamps ) {
-				const float *il = tw->instLamps[tw->visInst[i]];
-				out->lamps[0] = il[0]; out->lamps[1] = il[1]; out->lamps[2] = il[2]; out->lamps[3] = il[3];
-			} else {
-				out->lamps[0] = out->lamps[1] = out->lamps[2] = out->lamps[3] = 0.0f;
+	if ( fillJobs ) {
+		// each job's first record per material range: the ranges' starts plus the earlier jobs' counts
+		twFillCtx_t fc;
+		int fj, d;
+		for ( d = 0; d < numDrawList; d++ ) {
+			const int s = tw->drawList[d];
+			int cur = tw->batchStart[s];
+			for ( fj = 0; fj < fillJobs; fj++ ) {
+				const int n = tw->fillCount[fj * fillStride + s];
+				tw->fillCount[fj * fillStride + s] = cur;
+				cur += n;
 			}
-			// animation type, plus the placement's sky occlusion in the fraction (0 .. 0.98)
-			out->params[2] = (float)tw->anims[sub->tintIndex] + ( tw->skyOcc ? tw->skyOcc[tw->visInst[i]] * ( 0.98f / 255.0f ) : 0.0f );
-			if ( tw->anims[sub->tintIndex] == 0 || tw->anims[sub->tintIndex] >= 6 ) {
-				// physically based path: packed material values; a normal map takes the second texture slot
-				out->params[3] = tw->pbrPacks[sub->tintIndex];
-				if ( usePbr && out->params[0] <= 0.0f && tw->pbrImages[sub->tintIndex] && ( (int)tw->tilePacks[sub->tintIndex] >> 10 ) != 254 )
-					out->params[0] = -tw->pbrScales[sub->tintIndex];
+		}
+		fc.tw = tw; fc.data = data; fc.pass = pass; fc.numVis = numVis; fc.chunk = fillChunk; fc.stride = fillStride; fc.usePbr = usePbr;
+		TW_PoolRun( TW_FillJob, &fc, fillJobs );
+		if ( r_tworldThreadsCheck->integer && TW_CheckAlloc( 0, total ) ) {
+			// debug: the same records written in one run into a scratch buffer, compared byte for byte
+			for ( i = 0; i < numVis; i++ ) {
+				const tworldInst_t *inst = &tw->instances[tw->visInst[i]];
+				const tworldMesh_t *mesh = &tw->meshes[inst->mesh];
+				const int lod = tw->visLod[i];
+				for ( j = 0; j < mesh->lodNumSubs[lod]; j++ ) {
+					const int s = mesh->lodFirstSub[lod] + j;
+					const tworldSub_t *sub = &tw->subs[s];
+					if ( sub->pass != pass || !sub->surf.numIndexes )
+						continue;
+					TW_WriteInstRecord( tw, &s_twCheck.data[tw->batchCursor[s]++], tw->visInst[i], mesh, sub, inst->matrix, usePbr );
+				}
 			}
-			else if ( tw->anims[sub->tintIndex] == 4 )
-				out->params[3] = sub->shader->stages[1] ? 1.0f : 0.0f;		// foam: a second noise texture is present
-			else
-				out->params[3] = ( tw->anims[sub->tintIndex] == 3 ) ? mesh->zmax : mesh->zmin;
+			s_twCheck.fillPasses++;
+			s_twCheck.fillBad += ( memcmp( s_twCheck.data, data, (size_t)total * sizeof( twInstData_t ) ) != 0 ) ? 1 : 0;
+		}
+	} else {
+		for ( i = 0; i < numVis; i++ ) {
+			const tworldInst_t *inst = &tw->instances[tw->visInst[i]];
+			const tworldMesh_t *mesh = &tw->meshes[inst->mesh];
+			const int lod = tw->visLod[i];
+			for ( j = 0; j < mesh->lodNumSubs[lod]; j++ ) {
+				const int s = mesh->lodFirstSub[lod] + j;
+				const tworldSub_t *sub = &tw->subs[s];
+				if ( sub->pass != pass || !sub->surf.numIndexes )
+					continue;
+				TW_WriteInstRecord( tw, &data[tw->batchCursor[s]++], tw->visInst[i], mesh, sub, inst->matrix, usePbr );
+			}
 		}
 	}
 
@@ -1763,6 +2133,9 @@ stats:
 			const double statN = statFrames > 0 ? statFrames : 1;
 			statFrames = 0;
 			tw->lastStatsTime = now;
+			if ( r_tworldThreadsCheck->integer )
+				ri.Printf( PRINT_ALL, "TWORLD threads check (%i workers): culling %i views, %i differ; instance data %i passes, %i differ\n",
+					s_twPool.numThreads, s_twCheck.cullViews, s_twCheck.cullBad, s_twCheck.fillPasses, s_twCheck.fillBad );
 			ri.Printf( PRINT_ALL, "TWORLD cpu ms per frame: cull %.2f, uniforms %.2f, fill %.2f, draw %.2f (frame %.2f)\n",
 				s_twTime[0] / statN, s_twTime[1] / statN, s_twTime[2] / statN, s_twTime[3] / statN, 1000.0f / fps );
 			s_twTime[0] = s_twTime[1] = s_twTime[2] = s_twTime[3] = 0.0;
