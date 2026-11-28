@@ -808,6 +808,8 @@ int SV_BotGetSnapshotEntity( int client, int sequence ) {
 	client_t			*cl;
 	clientSnapshot_t	*frame;
 
+	SV_BotSnapshotAsked();	// from now on bots get snapshots again (sv_botSnapshots -1)
+
 	cl = &svs.clients[client];
 	frame = &cl->frames[cl->netchan.outgoingSequence & PACKET_MASK];
 	if (sequence < 0 || sequence >= frame->num_entities) {

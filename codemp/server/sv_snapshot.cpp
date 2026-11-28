@@ -960,6 +960,29 @@ void SV_SendMessageToClient( msg_t *msg, client_t *client ) {
 
 /*
 =======================
+SV_BotSnapshotsWanted
+=======================
+*/
+static qboolean sv_botSnapshotsAsked = qfalse;
+
+void SV_BotSnapshotAsked( void ) {
+	sv_botSnapshotsAsked = qtrue;
+}
+
+qboolean SV_BotSnapshotsWanted( void ) {
+	static cvar_t *sv_botSnapshots = NULL;
+	if ( !sv_botSnapshots ) {
+		sv_botSnapshots = Cvar_Get( "sv_botSnapshots", "-1", CVAR_ARCHIVE_ND,
+			"Build snapshots for bots: 1 = always (original), 0 = never, -1 = only once the game module reads one (BotGetSnapshotEntity)" );
+	}
+	if ( sv_botSnapshots->integer >= 0 ) {
+		return sv_botSnapshots->integer ? qtrue : qfalse;
+	}
+	return sv_botSnapshotsAsked;
+}
+
+/*
+=======================
 SV_SendClientSnapshot
 
 Also called by SV_FinalMessage
@@ -1011,6 +1034,17 @@ void SV_SendClientSnapshot( client_t *client ) {
 		SV_Netchan_Transmit( client, &msg );	//msg->cursize, msg->data );
 
 		client->sentGamedir = qtrue;
+	}
+
+	// a bot's snapshot is only read through BotGetSnapshotEntity (and by a demo of it); the NicJK
+	// bots never ask for it, so with sv_botSnapshots -1 (default) bots get none until the game
+	// module asks for one (SV_BotGetSnapshotEntity), 1 = always build them (the original), 0 = never
+	if ( client->netchan.remoteAddress.type == NA_BOT && !SV_BotSnapshotsWanted()
+#ifdef DEDICATED
+		&& !client->demo.demorecording && !sv_autoDemo->integer
+#endif
+		) {
+		return;
 	}
 
 	// build the snapshot
