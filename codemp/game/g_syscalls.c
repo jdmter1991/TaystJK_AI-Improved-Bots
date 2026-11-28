@@ -142,6 +142,21 @@ This abuses ownerNum to allow nonsolid duels
 (used by trace functions)
 ============================================
 */
+/*
+How far the "is anybody else duelling or racing" scans of BeginHack/EndHack have to look: only
+entities with a client can match, and beyond the player slots only NPCs and weapon shooters get a
+client (g_nonPlayerClients counts them since the map started). With g_fastJPTrace 1 and none of
+those, the scans stop at the player slots instead of walking every entity: the same entities are
+found, without touching the others on every trace.
+*/
+int g_nonPlayerClients = 0;
+static QINLINE int JP_HackScanEnd(void) {
+	if ( g_fastJPTrace.integer && !g_nonPlayerClients && level.num_entities > MAX_CLIENTS ) {
+		return MAX_CLIENTS;
+	}
+	return level.num_entities;
+}
+
 static QINLINE void BeginHack(int entityNum)
 {
 	// since we are in a duel, make everyone else nonsolid
@@ -192,7 +207,8 @@ static QINLINE void BeginHack(int entityNum)
 				return;
 			}
 		}
-		for (i = 0; i < level.num_entities; i++) { //loda fixme? This should go through all entities... to also account for people lightsabers..? or is that too costly
+		const int n = JP_HackScanEnd();
+		for (i = 0; i < n; i++) { //loda fixme? This should go through all entities... to also account for people lightsabers..? or is that too costly
 			if (i != entityNum) {
 				if (g_entities[i].inuse && g_entities[i].client &&
 					(g_entities[i].client->ps.duelInProgress || g_entities[i].client->sess.raceMode)) { //loda fixme? Or the ent is a saber, and its owner is in racemode or duel in progress
@@ -247,7 +263,8 @@ static QINLINE void EndHack(int entityNum) { //Should be inline?
 				return;
 			}
 		}
-		for (i = 0; i < level.num_entities; i++) {
+		const int n = JP_HackScanEnd();
+		for (i = 0; i < n; i++) {
 			if (i != entityNum) {
 				if (g_entities[i].inuse && g_entities[i].client &&
 					(g_entities[i].client->ps.duelInProgress || g_entities[i].client->sess.raceMode)) {
@@ -277,7 +294,8 @@ qboolean JP_TraceHackIdle( int entityNum ) {
 			return qtrue;
 		}
 	}
-	for ( i = 0; i < level.num_entities; i++ ) {
+	const int n = JP_HackScanEnd();
+	for ( i = 0; i < n; i++ ) {
 		if ( i != entityNum && g_entities[i].inuse && g_entities[i].client &&
 			( g_entities[i].client->ps.duelInProgress || g_entities[i].client->sess.raceMode ) ) {
 			return qfalse;

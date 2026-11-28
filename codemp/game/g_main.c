@@ -373,6 +373,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	// even if they aren't all used, so numbers inside that
 	// range are NEVER anything but clients
 	level.num_entities = MAX_CLIENTS;
+	g_nonPlayerClients = 0;
 
 	for ( i=0 ; i<MAX_CLIENTS ; i++ ) {
 		g_entities[i].classname = "clientslot";
@@ -3684,6 +3685,19 @@ void G_RunFrame( int levelTime ) {
 	level.previousTime = level.time;
 	level.time = levelTime;
 	GProf_FrameBegin();
+
+	// g_fastJPTrace: a safety net for JP_HackScanEnd. Should an entity beyond the player slots have
+	// been given a client somewhere that does not count it, count it now (the scans then walk every
+	// entity again, as without g_fastJPTrace)
+	if ( g_fastJPTrace.integer && !g_nonPlayerClients ) {
+		for ( i = MAX_CLIENTS; i < level.num_entities; i++ ) {
+			if ( g_entities[i].client ) {
+				g_nonPlayerClients = 1;
+				trap->Print( "g_fastJPTrace: entity %d has a client that was not counted\n", i );
+				break;
+			}
+		}
+	}
 
 
 

@@ -3656,6 +3656,7 @@ gclient_t *G_ClientForShooter(void)
 	{
 		if (!g_shooterClients[i].inuse)
 		{
+			g_nonPlayerClients++;	// JP_HackScanEnd
 			return &g_shooterClients[i].cl;
 		}
 		i++;

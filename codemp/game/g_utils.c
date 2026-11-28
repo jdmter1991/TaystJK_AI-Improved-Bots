@@ -466,6 +466,7 @@ gclient_t *gClPtrs[MAX_GENTITIES];
 
 void G_CreateFakeClient(int entNum, gclient_t **cl)
 {
+	g_nonPlayerClients++;	// JP_HackScanEnd
 	//trap->TrueMalloc((void **)cl, sizeof(gclient_t));
 	if (!gClPtrs[entNum])
 	{
