@@ -258,6 +258,34 @@ static QINLINE void EndHack(int entityNum) { //Should be inline?
 	}
 }
 
+/*
+JP_TraceHackIdle: true when BeginHack/EndHack would change nothing for a trace that passes
+entityNum, i.e. JP_Trace is then the same as a plain trap->Trace. Only reads (used from the parallel
+bot sensing, bot_mt).
+*/
+qboolean JP_TraceHackIdle( int entityNum ) {
+	int i;
+	if ( 0 <= entityNum && entityNum < MAX_CLIENTS && level.clients[entityNum].ps.duelInProgress ) {
+		return qfalse;
+	}
+	if ( entityNum >= 0 && entityNum < MAX_GENTITIES && g_entities[entityNum].client && g_entities[entityNum].client->sess.raceMode ) {
+		return qfalse;
+	}
+	if ( entityNum >= 0 && entityNum < MAX_GENTITIES && g_entities[entityNum].inuse ) {
+		const int saberOwner = g_entities[entityNum].r.ownerNum;
+		if ( saberOwner >= 0 && saberOwner < MAX_GENTITIES && g_entities[saberOwner].client && g_entities[saberOwner].client->ps.duelInProgress ) {
+			return qtrue;
+		}
+	}
+	for ( i = 0; i < level.num_entities; i++ ) {
+		if ( i != entityNum && g_entities[i].inuse && g_entities[i].client &&
+			( g_entities[i].client->ps.duelInProgress || g_entities[i].client->sess.raceMode ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
 void JP_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod ) {
 	BeginHack(passEntityNum);
 	trap->Trace( results, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod );

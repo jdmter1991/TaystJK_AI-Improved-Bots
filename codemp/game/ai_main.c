@@ -223,6 +223,13 @@ static int BotPerfFor(int client) {
 // disagreed (BOTPROF "verify" line). They should never disagree.
 vmCvar_t bot_perfVerify;
 static int botVerifyChecks[3], botVerifyMismatch[3];
+// bot_mt: parallel sensing, see BotMt_SensePhase
+vmCvar_t bot_mt;
+vmCvar_t bot_mtVerify;
+vmCvar_t bot_mtBase;
+static int botMtCur = -1;	/* the bot whose think / command is running while parallel sensing is on, else -1 */
+static qboolean BotMt_Lookup(trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod, qboolean jp);
+static void BotMt_Report(double frames);
 // bot_ai_fps: how often a bot that is not in a fight runs its full decision making (think).
 //   0 = every server frame (the original). Bots that are fighting, hurt, near an enemy, in the air,
 //   duelling or in the middle of a move think every server frame whatever this is (bot_ai_combatFps).
@@ -810,6 +817,7 @@ enum {
 	BPZ_FORCE,
 	BPZ_INPUT,
 	BPZ_UCMD,
+	BPZ_MTSENSE,
 	BPZ_MAX
 };
 static const char *botProfZoneNames[BPZ_MAX] = {
@@ -846,6 +854,7 @@ static const char *botProfZoneNames[BPZ_MAX] = {
 	"force tactics",
 	"usercmd building (every frame)",
 	"usercmd hand-off to the engine",
+	"parallel sensing (wall time, bot_mt)",
 };
 typedef struct {
 	int		calls;
@@ -955,6 +964,9 @@ static void BotProf_Account(const char *fn, double us) {
 }
 
 static void BotProf_JPTrace(const char *fn, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod) {
+	if (botMtCur >= 0 && BotMt_Lookup(results, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod, qtrue)) {
+		return;	/* made in the parallel phase with exactly these inputs */
+	}
 	if (botProf.enabled) {
 		const double t0 = BotProf_NowUs();
 		JP_Trace(results, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod);
@@ -965,6 +977,9 @@ static void BotProf_JPTrace(const char *fn, trace_t *results, const vec3_t start
 }
 
 static void BotProf_RawTrace(const char *fn, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod) {
+	if (botMtCur >= 0 && BotMt_Lookup(results, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod, qfalse)) {
+		return;
+	}
 	if (botProf.enabled) {
 		const double t0 = BotProf_NowUs();
 		trap->Trace(results, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod);
@@ -1166,6 +1181,7 @@ static void BotProf_Report(double nowUs) {
 			trap->Print("BOTPROF verify bot_perf %d: nearest waypoint %d checks %d different, danger list %d checks %d different, waypoint shield trace %d checks %d different\n",
 				bot_perf.integer, botVerifyChecks[0], botVerifyMismatch[0], botVerifyChecks[1], botVerifyMismatch[1], botVerifyChecks[2], botVerifyMismatch[2]);
 		}
+		BotMt_Report(botProf.frames);
 		trap->Print("BOTPROF map: waypoints %d, entities %d%c", gWPNum, level.num_entities, 10);
 		trap->Print("BOTPROF frame ai kcycles %.0f (per bot %.1f)\n", botProf.frameKCycles / frames, nbots ? botProf.frameKCycles / frames / nbots : 0.0);
 		trap->Print("BOTPROF frame ai ms: p50 %.2f p95 %.2f p99 %.2f max %.3f; bots %d, thinks per frame %.2f, ai us per bot per frame %.1f, zones cover %.1f%%\n",
@@ -1197,6 +1213,9 @@ static double BotProf_FrameBegin(void) {
 	trap->Cvar_Update(&bot_profile);
 	trap->Cvar_Update(&bot_perf);
 	trap->Cvar_Update(&bot_perfVerify);
+	trap->Cvar_Update(&bot_mt);
+	trap->Cvar_Update(&bot_mtVerify);
+	trap->Cvar_Update(&bot_mtBase);
 	trap->Cvar_Update(&bot_perfBase);
 	trap->Cvar_Update(&bot_scanCacheMs);
 	trap->Cvar_Update(&bot_ai_fps);
@@ -2563,7 +2582,8 @@ static void Bot_JK2Tactics(bot_state_t* bs, usercmd_t* ucmd) {
 }
 
 static void BotInputToUserCommand_Inner(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, int delta_angles[3], int time, int useTime);
-void BotInputToUserCommand(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, int delta_angles[3], int time, int useTime) {
+static void BotInputToUserCommand_Cliff(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd);
+static void BotInputToUserCommand_Head(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, int delta_angles[3], int time, int useTime) {
 	const gclient_t *cl = g_entities[bs->client].client;
 
 	BotInputToUserCommand_Inner(bs, bi, ucmd, delta_angles, time, useTime);
@@ -2755,6 +2775,13 @@ void BotInputToUserCommand(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, in
 		VectorCopy(cl->ps.origin, botLastGround[bs->client]);
 		botLastGroundTime[bs->client] = level.time;
 	}
+}
+
+/* the cliff check and the take-off record, the last part of BotInputToUserCommand: separate so that
+   with bot_mt 8 the cliff traces of all bots can be made in parallel first (BotMt_CliffPhase) */
+static void BotInputToUserCommand_Cliff(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd) {
+	const gclient_t *cl = g_entities[bs->client].client;
+
 	// last of all: is the step this command takes a step over a cliff?
 	if ((bs->features & BOTF_CLIFF) && cl && cl->ps.stats[STAT_HEALTH] > 0 && cl->ps.groundEntityNum != ENTITYNUM_NONE
 		&& (ucmd->forwardmove || ucmd->rightmove)) {
@@ -2832,6 +2859,11 @@ void BotInputToUserCommand(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, in
 		botTakeoff[bs->client].hold = (bs->inputHoldUpUntil > level.time) ? 1 : 0;
 		botTakeoff[bs->client].jumpT = (bs->jumpTime > level.time) ? 1 : 0;
 	}
+}
+
+void BotInputToUserCommand(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, int delta_angles[3], int time, int useTime) {
+	BotInputToUserCommand_Head(bs, bi, ucmd, delta_angles, time, useTime);
+	BotInputToUserCommand_Cliff(bs, bi, ucmd);
 }
 
 static void BotInputToUserCommand_Inner(bot_state_t* bs, bot_input_t* bi, usercmd_t* ucmd, int delta_angles[3], int time, int useTime) {
@@ -3241,8 +3273,9 @@ static void BotInputToUserCommand_Inner(bot_state_t* bs, bot_input_t* bi, usercm
 BotUpdateInput
 ==============
 */
-void BotUpdateInput(bot_state_t* bs, int time, int elapsed_time) {
-	bot_input_t bi;
+/* BotUpdateInput in two parts (bot_mt 8 runs the first part for all bots, the cliff traces in
+   parallel, then the second part); one after the other they are the original function */
+static void BotUpdateInput_Head(bot_state_t* bs, int time, int elapsed_time, bot_input_t* bi) {
 	int j;
 
 	//add the delta angles to the bot's current view angles
@@ -3252,21 +3285,32 @@ void BotUpdateInput(bot_state_t* bs, int time, int elapsed_time) {
 	//change the bot view angles
 	BotChangeViewAngles(bs, (float)elapsed_time / 1000);
 	//retrieve the bot input
-	trap->EA_GetInput(bs->client, (float)time / 1000, &bi);
+	trap->EA_GetInput(bs->client, (float)time / 1000, bi);
 	if (botSchedSkipped[bs->client] && !(bs->jumpHoldTime > level.time) && !(bs->inputHoldUpUntil > level.time)) {
 		// no think this frame (bot_ai_fps): the last decision stands, but a jump press is let go
-		bi.actionflags &= ~(ACTION_JUMP | ACTION_DELAYEDJUMP);
+		bi->actionflags &= ~(ACTION_JUMP | ACTION_DELAYEDJUMP);
 	}
 	//respawn hack
-	if (bi.actionflags & ACTION_RESPAWN) {
-		if (bs->lastucmd.buttons & BUTTON_ATTACK) bi.actionflags &= ~(ACTION_RESPAWN | ACTION_ATTACK);
+	if (bi->actionflags & ACTION_RESPAWN) {
+		if (bs->lastucmd.buttons & BUTTON_ATTACK) bi->actionflags &= ~(ACTION_RESPAWN | ACTION_ATTACK);
 	}
 	//convert the bot input to a usercmd
-	BotInputToUserCommand(bs, &bi, &bs->lastucmd, bs->cur_ps.delta_angles, time, bs->noUseTime);
+	BotInputToUserCommand_Head(bs, bi, &bs->lastucmd, bs->cur_ps.delta_angles, time, bs->noUseTime);
+}
+
+static void BotUpdateInput_Tail(bot_state_t* bs, bot_input_t* bi) {
+	int j;
+	BotInputToUserCommand_Cliff(bs, bi, &bs->lastucmd);
 	//subtract the delta angles
 	for (j = 0; j < 3; j++) {
 		bs->viewangles[j] = AngleMod(bs->viewangles[j] - SHORT2ANGLE(bs->cur_ps.delta_angles[j]));
 	}
+}
+
+void BotUpdateInput(bot_state_t* bs, int time, int elapsed_time) {
+	bot_input_t bi;
+	BotUpdateInput_Head(bs, time, elapsed_time, &bi);
+	BotUpdateInput_Tail(bs, &bi);
 }
 
 /*
@@ -20378,8 +20422,474 @@ static qboolean BotSched_ShouldThink(bot_state_t* bs, int time) {
 BotAIStartFrame
 ==================
 */
+/*
+==============================================================================
+bot_mt: parallel sensing (docs/reports/ENGINE_MULTITHREADING.md)
+
+Before the bots think, every bot's most expensive line-of-sight and probe traces are made in
+parallel on the engine's job threads (com_jobs) and kept per bot: the enemy scan (the candidates in
+view or in hearing, nearest first, until one is visible), the waypoint and enemy visibility traces,
+the wall check along the view and the duck probe toward the last goal. The serial think then runs exactly as before; when it
+asks for a trace with exactly the same start, end, box, pass entity, mask and flags as one made in
+the parallel phase, and no entity was linked or unlinked since (the engine's world generation) and
+the duel/race-mode trace trick (JP_Trace) would change nothing, the stored result is used instead of
+tracing again. Anything else is traced as before, so the decisions are the same as without bot_mt:
+the parallel phase only decides which traces are done early, not what they return.
+
+The parallel phase only reads the game state (no entity, bot or level field is written, nothing is
+printed, no random numbers are drawn) and writes only its own bot's slot; the slots are used by the
+serial phase in client order, so nothing depends on which thread did what.
+
+bot_mt (bits): 1 enemy scan, 2 waypoint + enemy visibility, 4 wall and duck probes, 8 the cliff check
+of the movement command (the commands are then built in two passes: everything up to the cliff
+check for all bots, the cliff traces in parallel, then the cliff check and the hand-off to the
+engine for all bots; no bot's command reads another bot's, so the order makes no difference).
+0 = off (default).
+bot_mtVerify 1: every stored result that is used is traced again and compared (testing).
+bot_mtBase: bot_mt of the baseline group in an A/B test (bot_abTest), -1 = as bot_mt.
+==============================================================================
+*/
+#define BOTMT_SCAN		1
+#define BOTMT_VIS		2
+#define BOTMT_MOVE		4
+#define BOTMT_CLIFF		8
+#define BOTMT_MAX_MEMO	40
+
+typedef struct {
+	vec3_t		start, end, mins, maxs;
+	int			pass, mask, capsule, flags, lod, jp;
+	trace_t		tr;
+} botMtMemo_t;
+
+typedef struct {
+	int			count;
+	int			time;		// level.time of the parallel phase
+	int			gen;		// world generation then
+	int			used;
+	botMtMemo_t	m[BOTMT_MAX_MEMO];
+} botMtSense_t;
+
+static botMtSense_t botMtSense[MAX_CLIENTS];
+static int botMtFrameGen;
+static int botMtApi = -1;	// the engine has JobsParallelFor (sv_gameJobsApi)
+static int botMtStat[8];	// prefetched, hits, misses, stale, verify checks, verify mismatches, prefetched not used, phases
+static int botMtLastThreads;
+enum { BMS_PREFETCH, BMS_HIT, BMS_MISS, BMS_STALE, BMS_VCHECK, BMS_VBAD, BMS_UNUSED, BMS_PHASES };
+
+static int BotMtFor(int client) {
+	if (bot_abTest.integer > 0 && (client < bot_abTest.integer || client >= 2 * bot_abTest.integer) && bot_mtBase.integer >= 0) {
+		return bot_mtBase.integer;
+	}
+	return bot_mt.integer;
+}
+
+static qboolean BotMt_KeyEq(const botMtMemo_t *m, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int pass, int mask, int capsule, int flags, int lod, int jp) {
+	static const vec3_t zero = { 0, 0, 0 };
+	if (m->pass != pass || m->mask != mask || m->capsule != capsule || m->flags != flags || m->lod != lod || m->jp != jp) {
+		return qfalse;
+	}
+	if (memcmp(m->start, start, sizeof(vec3_t)) || memcmp(m->end, end, sizeof(vec3_t))) {
+		return qfalse;
+	}
+	if (memcmp(m->mins, mins ? mins : zero, sizeof(vec3_t)) || memcmp(m->maxs, maxs ? maxs : zero, sizeof(vec3_t))) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean BotMt_TraceEq(const trace_t *a, const trace_t *b) {
+	return a->allsolid == b->allsolid && a->startsolid == b->startsolid && a->fraction == b->fraction
+		&& !memcmp(a->endpos, b->endpos, sizeof(vec3_t)) && !memcmp(a->plane.normal, b->plane.normal, sizeof(vec3_t))
+		&& a->plane.dist == b->plane.dist && a->surfaceFlags == b->surfaceFlags && a->contents == b->contents
+		&& a->entityNum == b->entityNum;
+}
+
+/* called from the trace wrappers while bot botMtCur thinks or builds its command */
+static qboolean BotMt_Lookup(trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod, qboolean jp) {
+	botMtSense_t *s = &botMtSense[botMtCur];
+	int k;
+	if (!s->count) {
+		return qfalse;
+	}
+	if (s->time != level.time || s->gen != trap->WorldGeneration()) {
+		botMtStat[BMS_STALE] += s->count;
+		s->count = 0;
+		return qfalse;
+	}
+	for (k = 0; k < s->count; k++) {
+		botMtMemo_t *m = &s->m[k];
+		if (!BotMt_KeyEq(m, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod, jp ? 1 : 0)) {
+			continue;
+		}
+		if (jp && !JP_TraceHackIdle(passEntityNum)) {
+			break;	/* a duel or race started since: the trace has to go through JP_Trace */
+		}
+		if (m->pass == -2) {
+			break;
+		}
+		*results = m->tr;
+		m->pass = -2;	/* each stored trace stands for one call */
+		s->used++;
+		botMtStat[BMS_HIT]++;
+		if (bot_mtVerify.integer) {
+			trace_t ref;
+			if (jp) {
+				(JP_Trace)(&ref, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod);	/* the function, not the profiling macro */
+			} else {
+				trap->Trace(&ref, start, mins, maxs, end, passEntityNum, contentmask, capsule, traceFlags, useLod);
+			}
+			botMtStat[BMS_VCHECK]++;
+			if (!BotMt_TraceEq(&ref, results)) {
+				botMtStat[BMS_VBAD]++;
+				*results = ref;
+			}
+		}
+		return qtrue;
+	}
+	botMtStat[BMS_MISS]++;
+	return qfalse;
+}
+
+/* parallel phase: one trace for the slot, through the engine directly; NULL when it must not be
+   made early (JP_Trace would bend it for a duel or race, or the slot is full) */
+static const trace_t *BotMt_Trace(botMtSense_t *s, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int pass, int mask) {
+	static const vec3_t zero = { 0, 0, 0 };
+	botMtMemo_t *m;
+	if (!JP_TraceHackIdle(pass)) {
+		return NULL;
+	}
+	if (s->count >= BOTMT_MAX_MEMO) {
+		return NULL;
+	}
+	m = &s->m[s->count];
+	VectorCopy(start, m->start);
+	VectorCopy(end, m->end);
+	VectorCopy(mins ? mins : zero, m->mins);
+	VectorCopy(maxs ? maxs : zero, m->maxs);
+	m->pass = pass;
+	m->mask = mask;
+	m->capsule = 0;
+	m->flags = 0;
+	m->lod = 0;
+	m->jp = 1;
+	trap->Trace(&m->tr, start, mins, maxs, end, pass, mask, qfalse, 0, 0);
+	s->count++;
+	return &m->tr;
+}
+
+/* the enemy the think will have when it scans: the current one unless the think drops it first */
+static gentity_t *BotMt_EnemyBeforeScan(bot_state_t *bs) {
+	gentity_t *e = bs->currentEnemy;
+	if (!e) {
+		return NULL;
+	}
+	if (e->client && e->client->pers.connected != CON_CONNECTED && e->client->pers.connected != CON_CONNECTING) {
+		return NULL;
+	}
+	if (bs->enemySeenTime < level.time || !PassStandardEnemyChecks(bs, e)) {
+		return NULL;
+	}
+	return e;
+}
+
+/* ScanForEnemies_Body's candidate choice and traces, from the state the think will start from */
+static int BotMt_PrefetchScan(bot_state_t *bs, botMtSense_t *s, const vec3_t eye, const vec3_t viewangles, gentity_t *enemy) {
+	vec3_t a, va;
+	float distcheck, hasEnemyDist = 0;
+	int i, j, k, numCandidates = 0;
+	int candIndex[MAX_CLIENTS];
+	float candDist[MAX_CLIENTS];
+
+	if (enemy) {
+		hasEnemyDist = bs->frame_Enemy_Len;
+	}
+	VectorCopy(viewangles, va);
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		qboolean tricked;
+		if (i == bs->client || !g_entities[i].client || OnSameTeam(&g_entities[bs->client], &g_entities[i]) ||
+			!PassStandardEnemyChecks(bs, &g_entities[i]) || !PassLovedOneCheck(bs, &g_entities[i])) {
+			continue;
+		}
+		VectorSubtract(g_entities[i].client->ps.origin, eye, a);
+		distcheck = VectorLength(a);
+		vectoangles(a, a);
+		if (!(distcheck < 999999)) {
+			continue;
+		}
+		if (hasEnemyDist && !(distcheck < (hasEnemyDist - 128))) {
+			continue;
+		}
+		tricked = BotMindTricked(bs->client, i) ? qtrue : qfalse;
+		if (!((InFieldOfVision(va, 90, a) && !tricked) || BotCanHear(bs, &g_entities[i], distcheck))) {
+			continue;
+		}
+		if (tricked && !(distcheck < 256 || (level.time - g_entities[i].client->dangerTime) < 100)) {
+			continue;
+		}
+		for (j = numCandidates; j > 0 && candDist[j - 1] > distcheck; j--) {
+			candDist[j] = candDist[j - 1];
+			candIndex[j] = candIndex[j - 1];
+		}
+		candDist[j] = distcheck;
+		candIndex[j] = i;
+		numCandidates++;
+	}
+	for (k = 0; k < numCandidates; k++) {
+		const trace_t *tr;
+		i = candIndex[k];
+		if (!BotPVSCheck(g_entities[i].client->ps.origin, eye)) {
+			continue;
+		}
+		tr = BotMt_Trace(s, eye, NULL, NULL, g_entities[i].client->ps.origin, -1, MASK_SOLID);
+		if (!tr) {
+			return -2;	/* unknown from here on */
+		}
+		if (tr->fraction == 1) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static void BotMt_SenseOne(bot_state_t *bs, botMtSense_t *s, int mode) {
+	const gentity_t *self = &g_entities[bs->client];
+	const playerState_t *ps = &self->client->ps;
+	vec3_t eye, viewangles;
+	gentity_t *enemy;
+	int j, found = -1;
+
+	if (self->health < 1 || self->client->sess.sessionTeam == TEAM_SPECTATOR || gDeactivated || bot_forgimmick.integer) {
+		return;	/* StandardBotAI returns before sensing */
+	}
+	/* BotAI: eye and view angles as the think will have them */
+	VectorCopy(ps->origin, eye);
+	eye[2] += ps->viewheight;
+	for (j = 0; j < 3; j++) {
+		viewangles[j] = AngleMod(bs->viewangles[j] + SHORT2ANGLE(ps->delta_angles[j]));
+	}
+	enemy = BotMt_EnemyBeforeScan(bs);
+
+	if (mode & BOTMT_VIS) {
+		/* the waypoint visibility trace: bs->origin to the current waypoint, if it is kept */
+		if (bs->wpCurrent && bs->wpSeenTime >= level.time && bs->wpTravelTime >= level.time) {
+			BotMt_Trace(s, ps->origin, NULL, NULL, bs->wpCurrent->origin, bs->client, MASK_SOLID);
+		}
+	}
+	if (mode & BOTMT_SCAN) {
+		found = BotMt_PrefetchScan(bs, s, eye, viewangles, enemy);
+	}
+	if ((mode & BOTMT_VIS) && found != -2) {
+		/* the enemy line of sight: the one found by the scan, or the kept one */
+		gentity_t *e = found >= 0 ? &g_entities[found] : enemy;
+		if (e && e->client) {
+			vec3_t eorg;
+			const trace_t *tr;
+			VectorCopy(e->client->ps.origin, eorg);
+			eorg[2] += e->client->ps.viewheight;
+			tr = BotMt_Trace(s, eye, NULL, NULL, eorg, bs->client, MASK_SOLID);
+			if (tr && tr->fraction != 1) {
+				/* not visible: the think looks at the place it was last seen */
+				BotMt_Trace(s, eye, NULL, NULL, bs->lastEnemySpotted, -1, MASK_SOLID);
+			}
+		}
+	}
+	if (mode & BOTMT_MOVE) {
+		/* the wall check before moving: 32 units along the view */
+		vec3_t mins, maxs, forward, end;
+		VectorSet(mins, -15, -15, -8);
+		VectorSet(maxs, 15, 15, 32);
+		AngleVectors(viewangles, forward, NULL, NULL);
+		VectorMA(ps->origin, 32, forward, end);
+		BotMt_Trace(s, ps->origin, mins, maxs, end, bs->client, MASK_PLAYERSOLID);
+	}
+	if (mode & BOTMT_MOVE) {
+		/* BotTrace_Duck toward the goal of the last think */
+		vec3_t mins, maxs, a, fwd, traceto_mod, tracefrom_mod;
+		const trace_t *tr;
+		VectorSubtract(bs->goalPosition, ps->origin, a);
+		vectoangles(a, a);
+		AngleVectors(a, fwd, NULL, NULL);
+		traceto_mod[0] = ps->origin[0] + fwd[0] * 4;
+		traceto_mod[1] = ps->origin[1] + fwd[1] * 4;
+		traceto_mod[2] = ps->origin[2] + fwd[2] * 4;
+		VectorSet(mins, -15, -15, -23);
+		VectorSet(maxs, 15, 15, 8);
+		tr = BotMt_Trace(s, ps->origin, mins, maxs, traceto_mod, bs->client, MASK_PLAYERSOLID);
+		if (tr && tr->fraction == 1) {
+			VectorCopy(ps->origin, tracefrom_mod);
+			tracefrom_mod[2] += 31;
+			traceto_mod[2] += 31;
+			VectorSet(mins, -15, -15, 0);
+			VectorSet(maxs, 15, 15, 32);
+			BotMt_Trace(s, tracefrom_mod, mins, maxs, traceto_mod, bs->client, MASK_PLAYERSOLID);
+		}
+	}
+}
+
+typedef struct {
+	int		n;
+	int		client[MAX_CLIENTS];
+	int		mode[MAX_CLIENTS];
+} botMtJobs_t;
+static botMtJobs_t botMtJobs;
+
+static void BotMt_SenseJob(void *ctx, int index, int thread) {
+	botMtJobs_t *jobs = (botMtJobs_t *)ctx;
+	const int c = jobs->client[index];
+	botMtSense_t *s = &botMtSense[c];
+	(void)thread;
+	s->count = 0;
+	s->used = 0;
+	s->time = level.time;
+	s->gen = botMtFrameGen;
+	BotMt_SenseOne(botstates[c], s, jobs->mode[index]);
+}
+
+static qboolean BotMt_Available(void) {
+	if (botMtApi < 0) {
+		botMtApi = (trap->Cvar_VariableIntegerValue("sv_gameJobsApi") >= 1 && trap->JobsParallelFor && trap->JobsThreads && trap->WorldGeneration) ? 1 : 0;
+		if (!botMtApi) {
+			trap->Print("bot_mt: the engine has no job system (sv_gameJobsApi), bot sensing stays serial\n");
+		}
+	}
+	return botMtApi ? qtrue : qfalse;
+}
+
+/* before the thinks of a frame */
+static void BotMt_SensePhase(void) {
+	int i;
+	botMtJobs.n = 0;
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		botMtSense_t *s = &botMtSense[i];
+		if (s->count) {
+			botMtStat[BMS_UNUSED] += s->count - s->used;
+			s->count = 0;
+		}
+		if (!botstates[i] || !botstates[i]->inuse || !g_entities[i].inuse || !g_entities[i].client
+			|| g_entities[i].client->pers.connected != CON_CONNECTED) {
+			continue;
+		}
+		if (!BotMtFor(i)) {
+			continue;
+		}
+		botMtJobs.client[botMtJobs.n] = i;
+		botMtJobs.mode[botMtJobs.n] = BotMtFor(i);
+		botMtJobs.n++;
+	}
+	if (!botMtJobs.n) {
+		return;
+	}
+	botMtFrameGen = trap->WorldGeneration();
+	botMtLastThreads = trap->JobsThreads();
+	trap->JobsParallelFor(botMtJobs.n, BotMt_SenseJob, &botMtJobs);
+	botMtStat[BMS_PHASES]++;
+	for (i = 0; i < botMtJobs.n; i++) {
+		botMtStat[BMS_PREFETCH] += botMtSense[botMtJobs.client[i]].count;
+	}
+}
+
+/* BotInputToUserCommand_Cliff's traces, from the finished command (bot_mt 8) */
+static void BotMt_PrefetchCliff(bot_state_t *bs, botMtSense_t *s, const bot_input_t *bi) {
+	const gclient_t *cl = g_entities[bs->client].client;
+	const usercmd_t *ucmd = &bs->lastucmd;
+	const int mask = MASK_PLAYERSOLID & ~CONTENTS_BODY;
+	vec3_t a, fw, rt, dir, top, bottom;
+	int i;
+	qboolean jumping;
+	if (!((bs->features & BOTF_CLIFF) && cl && cl->ps.stats[STAT_HEALTH] > 0 && cl->ps.groundEntityNum != ENTITYNUM_NONE
+		&& (ucmd->forwardmove || ucmd->rightmove))) {
+		return;
+	}
+	jumping = (ucmd->upmove > 0 || bs->inputHoldUpUntil > level.time) ? qtrue : qfalse;
+	VectorSet(a, 0, bi->viewangles[YAW], 0);
+	AngleVectors(a, fw, rt, NULL);
+	VectorScale(fw, (float)ucmd->forwardmove, dir);
+	VectorMA(dir, (float)ucmd->rightmove, rt, dir);
+	dir[2] = 0;
+	if (jumping && VectorNormalize(dir) > 0.01f) {
+		static const float ahead[3] = { 100.0f, 180.0f, 260.0f };
+		for (i = 0; i < 3; i++) {
+			const float rise = 96.0f + ((level.time - botLastNavJumpTime[bs->client] < 300) ? botLastNavJumpHold[bs->client] * 0.225f : 0.0f);
+			VectorMA(bs->origin, ahead[i], dir, top);
+			top[2] += rise;
+			VectorCopy(top, bottom);
+			bottom[2] -= 320.0f + 24.0f + rise;
+			if (!BotMt_Trace(s, top, NULL, NULL, bottom, bs->client, mask)) {
+				return;
+			}
+		}
+	} else if (!jumping && VectorNormalize(dir) > 0.01f) {
+		for (i = 0; i < 2; i++) {
+			const trace_t *tr;
+			VectorMA(bs->origin, i ? 72.0f : 36.0f, dir, top);
+			tr = BotMt_Trace(s, bs->origin, NULL, NULL, top, bs->client, mask);
+			if (!tr || tr->fraction < 1.0f) {
+				return;
+			}
+			VectorCopy(top, bottom);
+			bottom[2] -= 320.0f + 24.0f;
+			tr = BotMt_Trace(s, top, NULL, NULL, bottom, bs->client, mask);
+			if (!tr || tr->fraction >= 1.0f || (tr->plane.normal[2] < 0.45f && top[2] - tr->endpos[2] > 120.0f)) {
+				return;
+			}
+		}
+	}
+}
+
+static bot_input_t botMtBi[MAX_CLIENTS];
+
+static void BotMt_CliffJob(void *ctx, int index, int thread) {
+	botMtJobs_t *jobs = (botMtJobs_t *)ctx;
+	const int c = jobs->client[index];
+	botMtSense_t *s = &botMtSense[c];
+	(void)thread;
+	s->count = 0;
+	s->used = 0;
+	s->time = level.time;
+	s->gen = botMtFrameGen;
+	BotMt_PrefetchCliff(botstates[c], s, &botMtBi[c]);
+}
+
+/* between the two parts of the commands (bot_mt 8) */
+static void BotMt_CliffPhase(void) {
+	int i;
+	botMtJobs.n = 0;
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		botMtSense_t *s = &botMtSense[i];
+		if (s->count) {
+			botMtStat[BMS_UNUSED] += s->count - s->used;
+			s->count = 0;
+		}
+		if (!botstates[i] || !botstates[i]->inuse || g_entities[i].client->pers.connected != CON_CONNECTED || !(BotMtFor(i) & BOTMT_CLIFF)) {
+			continue;
+		}
+		botMtJobs.client[botMtJobs.n++] = i;
+	}
+	if (!botMtJobs.n) {
+		return;
+	}
+	botMtFrameGen = trap->WorldGeneration();
+	trap->JobsParallelFor(botMtJobs.n, BotMt_CliffJob, &botMtJobs);
+	for (i = 0; i < botMtJobs.n; i++) {
+		botMtStat[BMS_PREFETCH] += botMtSense[botMtJobs.client[i]].count;
+	}
+}
+
+static void BotMt_Report(double frames) {
+	const double f = frames > 0 ? frames : 1;
+	if (!bot_mt.integer && !botMtStat[BMS_PREFETCH]) {
+		return;
+	}
+	trap->Print("BOTPROF parallel sense (bot_mt %d, %d threads): traces made early %.1f/frame, used %.1f (%.0f%%), not made early %.1f, unused %.1f, dropped (world changed) %.1f; verify %d checks %d different\n",
+		bot_mt.integer, botMtLastThreads, botMtStat[BMS_PREFETCH] / f, botMtStat[BMS_HIT] / f,
+		botMtStat[BMS_PREFETCH] ? 100.0 * botMtStat[BMS_HIT] / botMtStat[BMS_PREFETCH] : 0.0,
+		botMtStat[BMS_MISS] / f, botMtStat[BMS_UNUSED] / f, botMtStat[BMS_STALE] / f, botMtStat[BMS_VCHECK], botMtStat[BMS_VBAD]);
+	memset(botMtStat, 0, sizeof(botMtStat));
+}
+
 int BotAIStartFrame(int time) {
 	int i;
+	int mtOn = 0;
 	int profThinks = 0;
 	const double profStart = BotProf_FrameBegin();
 
@@ -20453,6 +20963,12 @@ int BotAIStartFrame(int time) {
 	else thinktime = BOT_THINK_TIME;
 
 	BPZ_Pop();
+	if (bot_mt.integer && BotMt_Available()) {
+		BPZ_Push(BPZ_MTSENSE);
+		BotMt_SensePhase();
+		BPZ_Pop();
+		mtOn = 1;
+	}
 	// execute scheduled bot AI
 	for (i = 0; i < MAX_CLIENTS; i++) {
 		if (!botstates[i] || !botstates[i]->inuse) {
@@ -20468,7 +20984,9 @@ int BotAIStartFrame(int time) {
 				if (BotSched_ShouldThink(botstates[i], time)) {
 					const int since = botSchedLast[i] > 0 && time > botSchedLast[i] ? time - botSchedLast[i] : thinktime;
 					botSchedSkipped[i] = qfalse;
+					botMtCur = mtOn ? i : -1;
 					BotProf_Think(i, (float)(BotSched_FpsFor(i) > 0 ? since : thinktime) / 1000);
+					botMtCur = -1;
 					botSchedLast[i] = time;
 					botSchedHealth[i] = g_entities[i].client->ps.stats[STAT_HEALTH];
 					profThinks++;
@@ -20480,6 +20998,35 @@ int BotAIStartFrame(int time) {
 	}
 
 	// execute bot user commands every frame
+	if (mtOn && (bot_mt.integer & BOTMT_CLIFF)) {
+		/* bot_mt 8: the commands in two passes with the cliff traces made in parallel in between */
+		for (i = 0; i < MAX_CLIENTS; i++) {
+			if (!botstates[i] || !botstates[i]->inuse || g_entities[i].client->pers.connected != CON_CONNECTED) {
+				continue;
+			}
+			BPZ_Push(BPZ_INPUT);
+			botMtCur = i;
+			BotUpdateInput_Head(botstates[i], time, elapsed_time, &botMtBi[i]);
+			botMtCur = -1;
+			BPZ_Pop();
+		}
+		BPZ_Push(BPZ_MTSENSE);
+		BotMt_CliffPhase();
+		BPZ_Pop();
+		for (i = 0; i < MAX_CLIENTS; i++) {
+			if (!botstates[i] || !botstates[i]->inuse || g_entities[i].client->pers.connected != CON_CONNECTED) {
+				continue;
+			}
+			BPZ_Push(BPZ_INPUT);
+			botMtCur = i;
+			BotUpdateInput_Tail(botstates[i], &botMtBi[i]);
+			botMtCur = -1;
+			BPZ_Pop();
+			BPZ_Push(BPZ_UCMD);
+			trap->BotUserCommand(botstates[i]->client, &botstates[i]->lastucmd);
+			BPZ_Pop();
+		}
+	} else
 	for (i = 0; i < MAX_CLIENTS; i++) {
 		if (!botstates[i] || !botstates[i]->inuse) {
 			continue;
@@ -20489,7 +21036,9 @@ int BotAIStartFrame(int time) {
 		}
 
 		BPZ_Push(BPZ_INPUT);
+		botMtCur = mtOn ? i : -1;
 		BotUpdateInput(botstates[i], time, elapsed_time);
+		botMtCur = -1;
 		BPZ_Pop();
 		BPZ_Push(BPZ_UCMD);
 		trap->BotUserCommand(botstates[i]->client, &botstates[i]->lastucmd);
@@ -20528,6 +21077,9 @@ int BotAISetup(int restart) {
 	trap->Cvar_Register(&bot_profile, "bot_profile", "0", 0);
 	trap->Cvar_Register(&bot_perf, "bot_perf", "7", CVAR_ARCHIVE);	/* 1, 2, 4: measured faster, same decisions; 8 is off (A/B on naboo_theed inconclusive), see docs/reports/BOT_PERFORMANCE.md */
 	trap->Cvar_Register(&bot_perfVerify, "bot_perfVerify", "0", 0);
+	trap->Cvar_Register(&bot_mt, "bot_mt", "0", CVAR_ARCHIVE);	/* parallel sensing (needs com_jobs), see docs/reports/ENGINE_MULTITHREADING.md */
+	trap->Cvar_Register(&bot_mtVerify, "bot_mtVerify", "0", 0);
+	trap->Cvar_Register(&bot_mtBase, "bot_mtBase", "-1", 0);
 	trap->Cvar_Register(&bot_perfBase, "bot_perfBase", "-1", 0);
 	trap->Cvar_Register(&bot_scanCacheMs, "bot_scanCacheMs", "100", CVAR_ARCHIVE);
 	trap->Cvar_Register(&bot_ai_fps, "bot_ai_fps", "0", CVAR_ARCHIVE);

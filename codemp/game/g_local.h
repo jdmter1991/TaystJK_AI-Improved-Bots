@@ -2000,6 +2000,7 @@ qboolean Jedi_DodgeEvasion( gentity_t *self, gentity_t *shooter, trace_t *tr, in
 
 //syscalls japro
 extern void JP_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule, int traceFlags, int useLod );
+extern qboolean JP_TraceHackIdle( int entityNum );
 
 //tribes japro
 void DetectTribesClass(gentity_t *ent, char *model);
