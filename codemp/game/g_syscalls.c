@@ -147,7 +147,7 @@ How far the "is anybody else duelling or racing" scans of BeginHack/EndHack have
 entities with a client can match, and beyond the player slots only NPCs and weapon shooters get a
 client (g_nonPlayerClients counts them since the map started). With g_fastJPTrace 1 and none of
 those, the scans stop at the player slots instead of walking every entity: the same entities are
-found, without touching the others on every trace.
+found, without touching the others on every trace. On by default.
 */
 int g_nonPlayerClients = 0;
 static QINLINE int JP_HackScanEnd(void) {

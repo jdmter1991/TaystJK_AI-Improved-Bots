@@ -149,7 +149,7 @@ int WantedWorkers( void ) {
 } // namespace
 
 void Com_JobsInit( void ) {
-	com_jobs = Cvar_Get( "com_jobs", "0", CVAR_ARCHIVE_ND,
+	com_jobs = Cvar_Get( "com_jobs", "-1", CVAR_ARCHIVE_ND,
 		"Worker threads of the job system (parallel server work such as bot sensing): -1 = one per hardware thread beyond the first, 0 = off (everything serial, the original code paths)" );
 	com_jobsSpin = Cvar_Get( "com_jobsSpin", "100", CVAR_ARCHIVE_ND, "Microseconds a worker thread keeps spinning for the next parallel loop before it sleeps" );
 	com_jobs->modified = qtrue;

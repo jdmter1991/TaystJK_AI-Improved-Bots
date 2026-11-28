@@ -20444,7 +20444,7 @@ bot_mt (bits): 1 enemy scan, 2 waypoint + enemy visibility, 4 wall and duck prob
 of the movement command (the commands are then built in two passes: everything up to the cliff
 check for all bots, the cliff traces in parallel, then the cliff check and the hand-off to the
 engine for all bots; no bot's command reads another bot's, so the order makes no difference).
-0 = off (default).
+0 = off. Default 15 (all of it).
 bot_mtVerify 1: every stored result that is used is traced again and compared (testing).
 bot_mtBase: bot_mt of the baseline group in an A/B test (bot_abTest), -1 = as bot_mt.
 ==============================================================================
@@ -21012,7 +21012,8 @@ int BotAIStartFrame(int time) {
 	else thinktime = BOT_THINK_TIME;
 
 	BPZ_Pop();
-	if (BotMt_AnyMode() && BotMt_Available()) {
+	if (BotMt_AnyMode() && BotMt_Available() && (trap->JobsThreads() > 1 || bot_mtVerify.integer)) {
+		/* com_jobs 0: no worker threads, so the original serial code runs (bot_mtVerify still tests it) */
 		BPZ_Push(BPZ_MTSENSE);
 		BotMt_SensePhase();
 		BPZ_Pop();
@@ -21126,7 +21127,7 @@ int BotAISetup(int restart) {
 	trap->Cvar_Register(&bot_profile, "bot_profile", "0", 0);
 	trap->Cvar_Register(&bot_perf, "bot_perf", "7", CVAR_ARCHIVE);	/* 1, 2, 4: measured faster, same decisions; 8 is off (A/B on naboo_theed inconclusive), see docs/reports/BOT_PERFORMANCE.md */
 	trap->Cvar_Register(&bot_perfVerify, "bot_perfVerify", "0", 0);
-	trap->Cvar_Register(&bot_mt, "bot_mt", "0", CVAR_ARCHIVE);	/* parallel sensing (needs com_jobs), see docs/reports/ENGINE_MULTITHREADING.md */
+	trap->Cvar_Register(&bot_mt, "bot_mt", "15", CVAR_ARCHIVE);	/* parallel sensing (needs com_jobs), see docs/reports/ENGINE_MULTITHREADING.md */
 	trap->Cvar_Register(&bot_mtVerify, "bot_mtVerify", "0", 0);
 	trap->Cvar_Register(&bot_mtBase, "bot_mtBase", "-1", 0);
 	trap->Cvar_Register(&bot_perfBase, "bot_perfBase", "-1", 0);

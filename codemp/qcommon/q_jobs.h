@@ -10,8 +10,8 @@ Job system: a fixed pool of worker threads for data-parallel loops.
 	in index order afterwards, so the outcome does not depend on the timing.
 
 	The pool size comes from the cvar com_jobs (-1 = one worker per hardware thread beyond the
-	first, at most JOBS_MAX_THREADS-1; 0 = no workers: every loop runs serially on the calling
-	thread, exactly like the code before the job system). It is applied between frames.
+	first, at most JOBS_MAX_THREADS-1, the default; 0 = no workers: every loop runs serially on the
+	calling thread, exactly like the code before the job system). It is applied between frames.
 
 Nothing is allocated while a loop runs. Only one parallel loop runs at a time, started from the
 main thread.

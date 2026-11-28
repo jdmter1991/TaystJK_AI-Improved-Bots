@@ -12,7 +12,11 @@ World traces on huge maps were dominated by leafs holding tens of thousands of b
 
 ## Server
 
-- `sv_profile <seconds>` prints where server time goes (bot AI, game, snapshots) and logs every frame that took too long, with the number and cost of traces in it.
+- `sv_profile <seconds>` prints where server time goes (bot AI, game, snapshots) and logs every frame that took too long
+- `g_profile <seconds>` splits the game simulation into zones (Pmove, saber collision, Ghoul2 bolts, Force, missiles, ...) with average, 99th percentile and maximum per frame
+- `com_jobs` worker threads for parallel server work (`-1` = one per hardware thread beyond the first, `0` = off, every loop serial); `sv_traceBench` times collision traces on the main thread and on the job threads (see [the multithreading report](reports/ENGINE_MULTITHREADING.md))
+- `g_fastJPTrace 1` (default): the duel/race-mode trace trick only looks at entities that can have a client (same results, less work on every trace)
+- `sv_botSnapshots -1` (default): no snapshots for bots until the game module reads one (the NicJK bots never do); `1` = always build them, with the number and cost of traces in it.
 - `bot_profile <seconds>` prints the bot AI's cost per function and the `BOTEVAL` counters described in the bot document.
 - A client that is still loading the map is no longer sent transient commands (chat, prints, kill messages). With a full server these filled its command queue and dropped it at "awaiting gamestate".
 - Team spawning: when no spawn point was free, the game handed out the first one of that kind, enabled or not, so a whole wave of players spawned on one spot. It now picks a random enabled one.
