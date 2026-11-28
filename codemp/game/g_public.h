@@ -1098,6 +1098,12 @@ typedef struct gameImport_s {
 	void		(*G2API_CleanEntAttachments)			( void );
 	qboolean	(*G2API_OverrideServer)					( void *serverInstance );
 	void		(*G2API_GetSurfaceName)					( void *ghoul2, int surfNumber, int modelIndex, char *fillBuf );
+
+	// NicJK Unlimited engine extensions. Only there when the engine sets the cvar sv_gameJobsApi to 1
+	// (an older engine passes a shorter table): check it before using them.
+	int			(*JobsThreads)							( void );	// threads of a parallel loop, 1 = serial
+	void		(*JobsParallelFor)						( int count, void (*fn)( void *ctx, int index, int thread ), void *ctx );
+	int			(*WorldGeneration)						( void );	// changes when an entity is linked or unlinked
 } gameImport_t;
 
 typedef struct gameExport_s {

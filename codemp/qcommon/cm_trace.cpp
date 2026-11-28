@@ -23,11 +23,8 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "cm_local.h"
 #include "com_profile.h"
+#include "q_jobs.h"
 #include <algorithm>
-
-// set per trace by CM_Trace: whether leaf walks may use the per-leaf brush hierarchy
-int cm_accelActive = 0;
-cmSweep_t cm_sweep;
 
 // always use bbox vs. bbox collision and never capsule vs. bbox or vice versa
 //#define ALWAYS_BBOX_VS_BBOX
@@ -159,7 +156,7 @@ void CM_TestBoxInBrush( traceWork_t *tw, trace_t &trace, cbrush_t *brush ) {
 		return;
 	}
 
-	com_prof.cmBrushesTested++;
+	tw->prof->brushesTested++;
 
    if ( tw->sphere.use ) {
 		// the first six planes are the axial planes, so we only
@@ -228,25 +225,25 @@ void CM_TestInLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *l
 	// trace bounds (in their original leaf order), or the whole leaf
 	int			candidates[CM_ACCEL_MAX_CANDIDATES];
 	int			numCandidates = -1;
-	if ( leaf->accelRoot && cm_accelActive ) {
-		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], NULL, candidates, CM_ACCEL_MAX_CANDIDATES );
+	if ( leaf->accelRoot && tw->accelActive ) {
+		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], NULL, candidates, CM_ACCEL_MAX_CANDIDATES, &tw->prof->accelNodes );
 		if ( numCandidates > 1 ) {
 			std::sort( candidates, candidates + numCandidates );
 		}
 	}
 	const int	numBrushes = numCandidates >= 0 ? numCandidates : leaf->numLeafBrushes;
 
-	com_prof.cmLeafVisits++;
-	com_prof.cmLeafBrushesWalked += numBrushes;
+	tw->prof->leafVisits++;
+	tw->prof->leafBrushesWalked += numBrushes;
+	cmStamp_t	*const stamp = CM_StampFor( tw, local );
 
 	// test box position against all brushes in the leaf
 	for (k=0 ; k<numBrushes ; k++) {
 		brushnum = local->leafbrushes[leaf->firstLeafBrush + ( numCandidates >= 0 ? candidates[k] : k )];
 		b = &local->brushes[brushnum];
-		if (b->checkcount == local->checkcount) {
+		if ( CM_BrushSeen( stamp, local, brushnum, b ) ) {
 			continue;	// already checked this brush in another leaf
 		}
-		b->checkcount = local->checkcount;
 
 		if ( !(b->contents & tw->contents)) {
 			continue;
@@ -269,10 +266,9 @@ void CM_TestInLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *l
 			if ( !patch ) {
 				continue;
 			}
-			if ( patch->checkcount == local->checkcount ) {
+			if ( CM_PatchSeen( stamp, local, local->leafsurfaces[ leaf->firstLeafSurface + k ], patch ) ) {
 				continue;	// already checked this brush in another leaf
 			}
-			patch->checkcount = local->checkcount;
 
 			if ( !(patch->contents & tw->contents)) {
 				continue;
@@ -422,12 +418,12 @@ void CM_PositionTest( traceWork_t *tw, trace_t &trace ) {
 	ll.lastLeaf = 0;
 	ll.overflowed = qfalse;
 
-	cmg.checkcount++;
+	CM_NewCheck( tw, &cmg );
 
 	CM_BoxLeafnums_r( &ll, 0 );
 
 
-	cmg.checkcount++;
+	CM_NewCheck( tw, &cmg );
 
 	// test the contents of the leafs
 	for (i=0 ; i < ll.count ; i++) {
@@ -456,7 +452,9 @@ CM_TraceThroughPatch
 void CM_TraceThroughPatch( traceWork_t *tw, trace_t &trace, cPatch_t *patch ) {
 	float		oldFrac;
 
-	c_patch_traces++;
+	if ( !tw->thread ) {
+		c_patch_traces++;
+	}
 
 	oldFrac = trace.fraction;
 
@@ -583,7 +581,7 @@ void CM_TraceThroughBrush( traceWork_t *tw, trace_t &trace, cbrush_t *brush, boo
 		return;
 	}
 
-	com_prof.cmBrushesTested++;
+	tw->prof->brushesTested++;
 
 	tw->getout = false;
 	tw->startout = false;
@@ -683,32 +681,32 @@ void CM_TraceThroughLeaf( traceWork_t *tw, trace_t &trace, clipMap_t *local, cLe
 	// trace bounds (in their original leaf order), or the whole leaf
 	int			candidates[CM_ACCEL_MAX_CANDIDATES];
 	int			numCandidates = -1;
-	if ( leaf->accelRoot && cm_accelActive ) {
-		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], cm_sweep.use ? &cm_sweep : NULL, candidates, CM_ACCEL_MAX_CANDIDATES );
+	if ( leaf->accelRoot && tw->accelActive ) {
+		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], tw->sweep.use ? &tw->sweep : NULL, candidates, CM_ACCEL_MAX_CANDIDATES, &tw->prof->accelNodes );
 		if ( numCandidates > 1 ) {
 			std::sort( candidates, candidates + numCandidates );
 		}
 	}
 	const int	numBrushes = numCandidates >= 0 ? numCandidates : leaf->numLeafBrushes;
 
-	com_prof.cmLeafVisits++;
-	com_prof.cmLeafBrushesWalked += numBrushes;
+	tw->prof->leafVisits++;
+	tw->prof->leafBrushesWalked += numBrushes;
+	cmStamp_t	*const stamp = CM_StampFor( tw, local );
 
 	// trace line against all brushes in the leaf
 	for ( k = 0 ; k < numBrushes ; k++ ) {
 		brushnum = local->leafbrushes[leaf->firstLeafBrush + ( numCandidates >= 0 ? candidates[k] : k )];
 
 		b = &local->brushes[brushnum];
-		if ( b->checkcount == local->checkcount ) {
+		if ( CM_BrushSeen( stamp, local, brushnum, b ) ) {
 			continue;	// already checked this brush in another leaf
 		}
-		b->checkcount = local->checkcount;
 
 		if ( !(b->contents & tw->contents) ) {
 			continue;
 		}
 
-		if ( cm_sweep.use && b->boundsUsable && !CM_SweepTouchesBox( &cm_sweep, b->bounds[0], b->bounds[1] ) ) {
+		if ( tw->sweep.use && b->boundsUsable && !CM_SweepTouchesBox( &tw->sweep, b->bounds[0], b->bounds[1] ) ) {
 			continue;	// the moving volume never reaches this brush
 		}
 
@@ -730,10 +728,9 @@ void CM_TraceThroughLeaf( traceWork_t *tw, trace_t &trace, clipMap_t *local, cLe
 			if ( !patch ) {
 				continue;
 			}
-			if ( patch->checkcount == local->checkcount ) {
+			if ( CM_PatchSeen( stamp, local, local->leafsurfaces[ leaf->firstLeafSurface + k ], patch ) ) {
 				continue;	// already checked this patch in another leaf
 			}
-			patch->checkcount = local->checkcount;
 
 			if ( !(patch->contents & tw->contents) ) {
 				continue;
@@ -1058,16 +1055,17 @@ void CM_TraceToLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *
 	// trace bounds (in their original leaf order), or the whole leaf
 	int			candidates[CM_ACCEL_MAX_CANDIDATES];
 	int			numCandidates = -1;
-	if ( leaf->accelRoot && cm_accelActive ) {
-		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], cm_sweep.use ? &cm_sweep : NULL, candidates, CM_ACCEL_MAX_CANDIDATES );
+	if ( leaf->accelRoot && tw->accelActive ) {
+		numCandidates = CM_AccelCollect( local, leaf, tw->bounds[0], tw->bounds[1], tw->sweep.use ? &tw->sweep : NULL, candidates, CM_ACCEL_MAX_CANDIDATES, &tw->prof->accelNodes );
 		if ( numCandidates > 1 ) {
 			std::sort( candidates, candidates + numCandidates );
 		}
 	}
 	const int	numBrushes = numCandidates >= 0 ? numCandidates : leaf->numLeafBrushes;
 
-	com_prof.cmLeafVisits++;
-	com_prof.cmLeafBrushesWalked += numBrushes;
+	tw->prof->leafVisits++;
+	tw->prof->leafBrushesWalked += numBrushes;
+	cmStamp_t	*const stamp = CM_StampFor( tw, local );
 
 	// trace line against all brushes in the leaf
 	for ( k = 0 ; k < numBrushes ; k++ )
@@ -1075,18 +1073,17 @@ void CM_TraceToLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *
 		brushnum = local->leafbrushes[leaf->firstLeafBrush + ( numCandidates >= 0 ? candidates[k] : k )];
 
 		b = &local->brushes[brushnum];
-		if ( b->checkcount == local->checkcount )
+		if ( CM_BrushSeen( stamp, local, brushnum, b ) )
 		{
 			continue;	// already checked this brush in another leaf
 		}
-		b->checkcount = local->checkcount;
 
 		if ( !(b->contents & tw->contents) )
 		{
 			continue;
 		}
 
-		if ( cm_sweep.use && b->boundsUsable && !CM_SweepTouchesBox( &cm_sweep, b->bounds[0], b->bounds[1] ) ) {
+		if ( tw->sweep.use && b->boundsUsable && !CM_SweepTouchesBox( &tw->sweep, b->bounds[0], b->bounds[1] ) ) {
 			continue;	// the moving volume never reaches this brush
 		}
 
@@ -1108,10 +1105,9 @@ void CM_TraceToLeaf( traceWork_t *tw, trace_t &trace, cLeaf_t *leaf, clipMap_t *
 			if ( !patch ) {
 				continue;
 			}
-			if ( patch->checkcount == local->checkcount ) {
+			if ( CM_PatchSeen( stamp, local, local->leafsurfaces[ leaf->firstLeafSurface + k ], patch ) ) {
 				continue;	// already checked this patch in another leaf
 			}
-			patch->checkcount = local->checkcount;
 
 			if ( !(patch->contents & tw->contents) ) {
 				continue;
@@ -1279,25 +1275,23 @@ CM_Trace
 */
 static void CM_TraceActual( trace_t *trace, const vec3_t start, const vec3_t end,
 						  const vec3_t mins, const vec3_t maxs,
-						  clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere );
+						  clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere, int accelActive );
 
 void CM_Trace( trace_t *trace, const vec3_t start, const vec3_t end,
 						  const vec3_t mins, const vec3_t maxs,
 						  clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere ) {
 #ifndef BSPC
-	cm_accelActive = ( cm_accel && cm_accel->integer ) ? 1 : 0;
+	const int accelActive = ( cm_accel && cm_accel->integer ) ? 1 : 0;
 
-	if ( cm_accelVerify && cm_accelVerify->integer ) {
+	if ( cm_accelVerify && cm_accelVerify->integer && !Com_JobsThreadIndex() ) {
 		static int	checked = 0, mismatches = 0;
 		trace_t		ref;
 
 		static uint64_t refNs = 0, accNs = 0, refMaxNs = 0, accMaxNs = 0;
 		const uint64_t t0 = Com_ProfNowNs();
-		cm_accelActive = 0;
-		CM_TraceActual( &ref, start, end, mins, maxs, model, origin, brushmask, capsule, sphere );
+		CM_TraceActual( &ref, start, end, mins, maxs, model, origin, brushmask, capsule, sphere, 0 );
 		const uint64_t t1 = Com_ProfNowNs();
-		cm_accelActive = 1;
-		CM_TraceActual( trace, start, end, mins, maxs, model, origin, brushmask, capsule, sphere );
+		CM_TraceActual( trace, start, end, mins, maxs, model, origin, brushmask, capsule, sphere, 1 );
 		const uint64_t t2 = Com_ProfNowNs();
 		refNs += t1 - t0;	accNs += t2 - t1;
 		if ( t1 - t0 > refMaxNs ) refMaxNs = t1 - t0;
@@ -1322,13 +1316,15 @@ void CM_Trace( trace_t *trace, const vec3_t start, const vec3_t end,
 		}
 		return;
 	}
+	CM_TraceActual( trace, start, end, mins, maxs, model, origin, brushmask, capsule, sphere, accelActive );
+#else
+	CM_TraceActual( trace, start, end, mins, maxs, model, origin, brushmask, capsule, sphere, 0 );
 #endif
-	CM_TraceActual( trace, start, end, mins, maxs, model, origin, brushmask, capsule, sphere );
 }
 
 static void CM_TraceActual( trace_t *trace, const vec3_t start, const vec3_t end,
 						  const vec3_t mins, const vec3_t maxs,
-						  clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere ) {
+						  clipHandle_t model, const vec3_t origin, int brushmask, int capsule, sphere_t *sphere, int accelActive ) {
 	int			i;
 	traceWork_t	tw;
 	vec3_t		offset;
@@ -1337,12 +1333,19 @@ static void CM_TraceActual( trace_t *trace, const vec3_t start, const vec3_t end
 
 	cmod = CM_ClipHandleToModel( model, &local );
 
-	local->checkcount++;		// for multi-check avoidance
-
-	c_traces++;				// for statistics, may be zeroed
-
 	// fill in a default trace
 	Com_Memset( &tw, 0, sizeof(tw) );
+	tw.thread = Com_JobsThreadIndex();
+	tw.stamps = tw.thread ? CM_ThreadStamps( tw.thread ) : NULL;
+	tw.prof = tw.thread ? &com_profThread[tw.thread].cm : &com_prof.cm;
+	tw.accelActive = accelActive;
+
+	CM_NewCheck( &tw, local );		// for multi-check avoidance
+
+	if ( !tw.thread ) {
+		c_traces++;				// for statistics, may be zeroed
+	}
+
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = 1;	// assume it goes the entire distance until shown otherwise
 	VectorCopy(origin, tw.modelOrigin);
@@ -1447,20 +1450,20 @@ static void CM_TraceActual( trace_t *trace, const vec3_t start, const vec3_t end
 
 	// describe the moving volume for swept culling (accelerated path only, so that
 	// cm_accel 0 is exactly the stock code)
-	cm_sweep.use = 0;
-	if ( cm_accelActive ) {
+	tw.sweep.use = 0;
+	if ( tw.accelActive ) {
 		bool moves = false;
 		for ( i = 0 ; i < 3 ; i++ ) {
-			cm_sweep.start[i] = tw.start[i];
-			cm_sweep.delta[i] = tw.end[i] - tw.start[i];
-			cm_sweep.invDelta[i] = cm_sweep.delta[i] != 0.0f ? 1.0f / cm_sweep.delta[i] : 0.0f;
+			tw.sweep.start[i] = tw.start[i];
+			tw.sweep.delta[i] = tw.end[i] - tw.start[i];
+			tw.sweep.invDelta[i] = tw.sweep.delta[i] != 0.0f ? 1.0f / tw.sweep.delta[i] : 0.0f;
 			// tw.bounds already accounts for box or capsule size; take the half-extent from it
-			cm_sweep.ext[i] = 0.5f * ( ( tw.bounds[1][i] - tw.bounds[0][i] ) - fabsf( cm_sweep.delta[i] ) ) + CM_SWEEP_MARGIN;
-			if ( cm_sweep.delta[i] != 0.0f ) {
+			tw.sweep.ext[i] = 0.5f * ( ( tw.bounds[1][i] - tw.bounds[0][i] ) - fabsf( tw.sweep.delta[i] ) ) + CM_SWEEP_MARGIN;
+			if ( tw.sweep.delta[i] != 0.0f ) {
 				moves = true;
 			}
 		}
-		cm_sweep.use = moves ? 1 : 0;
+		tw.sweep.use = moves ? 1 : 0;
 	}
 
 	// a model without a node tree is one leaf of brushes. The world model of a misc_bsp part has a tree

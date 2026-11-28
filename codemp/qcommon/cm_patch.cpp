@@ -1311,10 +1311,10 @@ static inline void CM_TracePointThroughPatchCollide( traceWork_t *tw, trace_t &t
 		if ( j == facet->numBorders ) {
 			// we hit this facet
 #ifndef BSPC
-			if (!cv) {
+			if (!tw->thread && !cv) {
 				cv = Cvar_Get( "r_debugSurfaceUpdate", "1", 0 );
 			}
-			if (cv->integer) {
+			if (!tw->thread && cv->integer) {
 				debugPatchCollide = pc;
 				debugFacet = facet;
 			}
@@ -1508,10 +1508,10 @@ void CM_TraceThroughPatchCollide( traceWork_t *tw, trace_t &trace, const struct 
 					enterFrac = 0;
 				}
 #ifndef BSPC
-				if (!cv) {
+				if (!tw->thread && !cv) {
 					cv = Cvar_Get( "r_debugSurfaceUpdate", "1", 0 );
 				}
-				if (cv && cv->integer) {
+				if (!tw->thread && cv && cv->integer) {
 					debugPatchCollide = pc;
 					debugFacet = facet;
 				}

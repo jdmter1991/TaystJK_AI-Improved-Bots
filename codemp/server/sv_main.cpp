@@ -24,6 +24,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "server.h"
 #include "qcommon/com_profile.h"
+#include "qcommon/q_jobs.h"
 
 #include "ghoul2/ghoul2_shared.h"
 #include "sv_gameapi.h"
@@ -1515,10 +1516,10 @@ static void SV_ProfileReport( uint64_t nowNs ) {
 			phaseNames[ph], tr / f, trNs / f / 1e6, wNs / f / 1e6, tr ? trNs / (double)tr / 1e3 : 0.0, pc / f, pcNs / f / 1e6 );
 	}
 	{
-		const uint64_t lv = com_prof.cmLeafVisits - svProf.base.cmLeafVisits;
-		const uint64_t lb = com_prof.cmLeafBrushesWalked - svProf.base.cmLeafBrushesWalked;
-		const uint64_t bt = com_prof.cmBrushesTested - svProf.base.cmBrushesTested;
-		const uint64_t an = com_prof.cmAccelNodes - svProf.base.cmAccelNodes;
+		const uint64_t lv = com_prof.cm.leafVisits - svProf.base.cm.leafVisits;
+		const uint64_t lb = com_prof.cm.leafBrushesWalked - svProf.base.cm.leafBrushesWalked;
+		const uint64_t bt = com_prof.cm.brushesTested - svProf.base.cm.brushesTested;
+		const uint64_t an = com_prof.cm.accelNodes - svProf.base.cm.accelNodes;
 		Com_Printf( "SVPROF cm per frame: leaf visits %.1f  leafbrushes walked %.0f  brushes plane-tested %.1f  accel nodes %.0f\n",
 			lv / f, lb / f, bt / f, an / f );
 	}
@@ -1701,6 +1702,9 @@ void SV_Frame( int msec ) {
 
 	// update ping based on the all received frames
 	SV_CalcPings();
+
+	// worker threads follow com_jobs between frames
+	Com_JobsApplyCvar();
 
 	if ( !sv_profile ) {
 		sv_profile = Cvar_Get( "sv_profile", "0", CVAR_TEMP, "Print server frame/AI/trace profile every N seconds (0 = off)" );

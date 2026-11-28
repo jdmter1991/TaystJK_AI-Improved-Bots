@@ -24,7 +24,21 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 // world.c -- world query functions
 
 #include "server.h"
+#include <atomic>
 #include "qcommon/com_profile.h"
+#include "qcommon/q_jobs.h"
+
+// changes whenever an entity is linked into or unlinked from the world (see SV_WorldGeneration)
+static int sv_worldGeneration = 0;
+int SV_WorldGeneration( void ) {
+	return sv_worldGeneration;
+}
+
+// Ghoul2 hit tests asked for from a job thread: not thread-safe, so they are left out and counted
+static std::atomic<int> sv_jobG2Traces( 0 );
+int SV_JobG2TracesTake( void ) {
+	return sv_jobG2Traces.exchange( 0 );
+}
 #include "ghoul2/ghoul2_shared.h"
 #include "qcommon/cm_public.h"
 
@@ -174,6 +188,11 @@ void SV_UnlinkEntity( sharedEntity_t *gEnt ) {
 	svEntity_t		*scan;
 	worldSector_t	*ws;
 
+	if ( Com_JobsActive() ) {
+		Com_Error( ERR_FATAL, "SV_UnlinkEntity during a parallel loop" );
+	}
+	sv_worldGeneration++;
+
 	ent = SV_SvEntityForGentity( gEnt );
 
 	gEnt->r.linked = qfalse;
@@ -211,6 +230,11 @@ void SV_LinkEntity( sharedEntity_t *gEnt ) {
 	worldSector_t	*node;
 	int			leafs[MAX_TOTAL_ENT_LEAFS];
 	int			cluster;
+
+	if ( Com_JobsActive() ) {
+		Com_Error( ERR_FATAL, "SV_LinkEntity during a parallel loop" );
+	}
+	sv_worldGeneration++;
 	int			num_leafs;
 	int			i, j, k;
 	int			area;
@@ -537,7 +561,9 @@ static float VectorDistance(vec3_t p1, vec3_t p2)
 #endif
 
 static void SV_ClipMoveToEntities( moveclip_t *clip ) {
-	static int	touchlist[MAX_GENTITIES];
+	static int	touchlists[JOBS_MAX_THREADS][MAX_GENTITIES];
+	const int	jobThread = Com_JobsThreadIndex();
+	int			*touchlist = touchlists[jobThread];
 	int			i, num;
 	sharedEntity_t *touch;
 	int			passOwnerNum;
@@ -708,7 +734,11 @@ Ghoul2 Insert Start
 #else
 		//rww - since this is multiplayer and we don't have the luxury of violating networking rules in horrible ways,
 		//this must be done somewhat differently.
-		if ((clip->traceFlags & G2TRFLAG_DOGHOULTRACE) && trace.entityNum == touch->s.number && touch->ghoul2 && ((clip->traceFlags & G2TRFLAG_HITCORPSES) || !(touch->s.eFlags & EF_DEAD)))
+		if ((clip->traceFlags & G2TRFLAG_DOGHOULTRACE) && trace.entityNum == touch->s.number && touch->ghoul2 && ((clip->traceFlags & G2TRFLAG_HITCORPSES) || !(touch->s.eFlags & EF_DEAD)) && jobThread)
+		{ // Ghoul2 collision is not thread-safe: never asked for by the parallel code; counted if it is
+			sv_jobG2Traces.fetch_add( 1 );
+		}
+		else if ((clip->traceFlags & G2TRFLAG_DOGHOULTRACE) && trace.entityNum == touch->s.number && touch->ghoul2 && ((clip->traceFlags & G2TRFLAG_HITCORPSES) || !(touch->s.eFlags & EF_DEAD)))
 		{ //standard behavior will be to ignore g2 col on dead ents, but if traceFlags is set to allow, then we'll try g2 col on EF_DEAD people too.
 			static G2Trace_t G2Trace;
 			vec3_t angles;
@@ -837,6 +867,45 @@ Ghoul2 Insert End
 
 	Com_Memset ( &clip, 0, sizeof ( moveclip_t ) );
 
+	const int jobThread = Com_JobsThreadIndex();
+	if ( jobThread ) {
+		// a job thread: its own counters, merged after the parallel loop (SV_JobsMergeProfile)
+		comProfThread_t *pt = &com_profThread[jobThread];
+		const uint64_t t0 = com_prof.enabled ? Com_ProfNowNs() : 0;
+		pt->svTraces++;
+		CM_BoxTrace( &clip.trace, start, end, mins, maxs, 0, contentmask, capsule );
+		if ( t0 ) {
+			pt->svWorldTraceNs += Com_ProfNowNs() - t0;
+		}
+		clip.trace.entityNum = clip.trace.fraction != 1.0 ? ENTITYNUM_WORLD : ENTITYNUM_NONE;
+		if ( clip.trace.fraction != 0 ) {
+			clip.contentmask = contentmask;
+			VectorCopy( start, clip.start );
+			clip.traceFlags = traceFlags;
+			clip.useLod = useLod;
+			VectorCopy( end, clip.end );
+			clip.mins = mins;
+			clip.maxs = maxs;
+			clip.passEntityNum = passEntityNum;
+			clip.capsule = capsule;
+			for ( i=0 ; i<3 ; i++ ) {
+				if ( end[i] > start[i] ) {
+					clip.boxmins[i] = clip.start[i] + clip.mins[i] - 1;
+					clip.boxmaxs[i] = clip.end[i] + clip.maxs[i] + 1;
+				} else {
+					clip.boxmins[i] = clip.end[i] + clip.mins[i] - 1;
+					clip.boxmaxs[i] = clip.start[i] + clip.maxs[i] + 1;
+				}
+			}
+			SV_ClipMoveToEntities ( &clip );
+		}
+		*results = clip.trace;
+		if ( t0 ) {
+			pt->svTraceNs += Com_ProfNowNs() - t0;
+		}
+		return;
+	}
+
 	const int profPhase = com_prof.phase;
 	const uint64_t profStart = com_prof.enabled ? Com_ProfNowNs() : 0;
 	com_prof.svTraces[profPhase]++;
@@ -923,9 +992,14 @@ int SV_PointContents( const vec3_t p, int passEntityNum ) {
 	int			contents, c2;
 	clipHandle_t	clipHandle;
 
+	const int jobThread = Com_JobsThreadIndex();
 	const int profPhase = com_prof.phase;
-	const uint64_t profStart = com_prof.enabled ? Com_ProfNowNs() : 0;
-	com_prof.svPointContents[profPhase]++;
+	const uint64_t profStart = ( com_prof.enabled && !jobThread ) ? Com_ProfNowNs() : 0;
+	if ( jobThread ) {
+		com_profThread[jobThread].svPointContents++;
+	} else {
+		com_prof.svPointContents[profPhase]++;
+	}
 
 	// get base contents from world
 	contents = CM_PointContents( p, 0 );

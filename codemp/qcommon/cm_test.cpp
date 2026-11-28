@@ -23,6 +23,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "cm_local.h"
 #include "com_profile.h"
+#include "q_jobs.h"
 
 /*
 ==================
@@ -50,7 +51,9 @@ int CM_PointLeafnum_r( const vec3_t p, int num, clipMap_t *local ) {
 			num = node->children[0];
 	}
 
-	c_pointcontents++;		// optimize counter
+	if ( !Com_JobsThreadIndex() ) {
+		c_pointcontents++;		// optimize counter
+	}
 
 	return -1 - num;
 }
@@ -243,12 +246,15 @@ int CM_PointContents( const vec3_t p, clipHandle_t model ) {
 	int			candidates[CM_ACCEL_MAX_CANDIDATES];
 	int			numCandidates = -1;
 	if ( leaf->accelRoot && cm_accel && cm_accel->integer ) {
-		numCandidates = CM_AccelCollect( local, leaf, p, p, NULL, candidates, CM_ACCEL_MAX_CANDIDATES );
+		numCandidates = CM_AccelCollect( local, leaf, p, p, NULL, candidates, CM_ACCEL_MAX_CANDIDATES, &CM_ProfCounters()->accelNodes );
 	}
 	const int	numBrushes = numCandidates >= 0 ? numCandidates : leaf->numLeafBrushes;
 
-	com_prof.cmLeafVisits++;
-	com_prof.cmLeafBrushesWalked += numBrushes;
+	{
+		comProfCm_t *pc = CM_ProfCounters();
+		pc->leafVisits++;
+		pc->leafBrushesWalked += numBrushes;
+	}
 
 	contents = 0;
 	for (k=0 ; k<numBrushes ; k++) {

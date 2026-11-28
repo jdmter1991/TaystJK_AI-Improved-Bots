@@ -24,6 +24,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 // cmodel.c -- model loading
 #include "cm_local.h"
 #include "com_profile.h"
+#include "q_jobs.h"
 #include "qcommon/qfiles.h"
 
 #ifdef BSPC
@@ -58,6 +59,12 @@ clipMap_t	cmg; //rwwRMG - changed from cm
 int			c_pointcontents;
 int			c_traces, c_brush_traces, c_patch_traces;
 comProfile_t	com_prof;
+comProfThread_t	com_profThread[JOBS_MAX_THREADS];
+
+comProfCm_t *CM_ProfCounters( void ) {
+	const int t = Com_JobsThreadIndex();
+	return t ? &com_profThread[t].cm : &com_prof.cm;
+}
 
 
 byte		*cmod_base;
@@ -72,9 +79,10 @@ cvar_t		*cm_subBSPTree;
 cvar_t		*cm_accelVerify;
 #endif
 
-cmodel_t	box_model;
-cplane_t	*box_planes;
-cbrush_t	*box_brush;
+// one temporary box per job thread (index 0 = main thread, the original layout)
+static cmodel_t	box_models[JOBS_MAX_THREADS];
+static cplane_t	*box_planesT[JOBS_MAX_THREADS];
+static cbrush_t	*box_brushT[JOBS_MAX_THREADS];
 
 
 
@@ -266,7 +274,7 @@ void CMod_LoadBrushes( const lump_t *l, clipMap_t &cm ) {
 	}
 	count = l->filelen / sizeof(*in);
 
-	cm.brushes = (cbrush_t *)Hunk_Alloc( ( BOX_BRUSHES + count ) * sizeof( *cm.brushes ), h_high );
+	cm.brushes = (cbrush_t *)Hunk_Alloc( ( BOX_BRUSHES * JOBS_MAX_THREADS + count ) * sizeof( *cm.brushes ), h_high );
 	cm.numBrushes = count;
 
 	out = cm.brushes;
@@ -349,7 +357,7 @@ static void CMod_LoadPlanes (const lump_t *l, clipMap_t &cm)
 
 	if (count < 1)
 		Com_Error (ERR_DROP, "Map with no planes");
-	cm.planes = (struct cplane_s *)Hunk_Alloc( ( BOX_PLANES + count ) * sizeof( *cm.planes ), h_high );
+	cm.planes = (struct cplane_s *)Hunk_Alloc( ( BOX_PLANES * JOBS_MAX_THREADS + count ) * sizeof( *cm.planes ), h_high );
 	cm.numPlanes = count;
 
 	out = cm.planes;
@@ -387,7 +395,7 @@ static void CMod_LoadLeafBrushes (const lump_t *l, clipMap_t &cm)
 		Com_Error (ERR_DROP, "CMod_LoadLeafBrushes: funny lump size");
 	count = l->filelen / sizeof(*in);
 
-	cm.leafbrushes = (int *)Hunk_Alloc( (count + BOX_BRUSHES) * sizeof( *cm.leafbrushes ), h_high );
+	cm.leafbrushes = (int *)Hunk_Alloc( (count + BOX_BRUSHES * JOBS_MAX_THREADS) * sizeof( *cm.leafbrushes ), h_high );
 	cm.numLeafBrushes = count;
 
 	out = cm.leafbrushes;
@@ -443,7 +451,7 @@ static void CMod_LoadBrushSides (const lump_t *l, clipMap_t &cm)
 	}
 	count = l->filelen / sizeof(*in);
 
-	cm.brushsides = (cbrushside_t *)Hunk_Alloc( ( BOX_SIDES + count ) * sizeof( *cm.brushsides ), h_high );
+	cm.brushsides = (cbrushside_t *)Hunk_Alloc( ( BOX_SIDES * JOBS_MAX_THREADS + count ) * sizeof( *cm.brushsides ), h_high );
 	cm.numBrushSides = count;
 
 	out = cm.brushsides;
@@ -831,12 +839,80 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum )
 
 /*
 ==================
+Per-thread collision scratch for the job system
+
+A job thread cannot use the checkcount fields in the brushes and patches (the main thread and the
+other job threads use them at the same time), so each job thread has its own stamp arrays per clip
+map. They are allocated before a parallel loop when the loaded maps or the thread count changed,
+never while a loop runs.
+==================
+*/
+static cmStamp_t	*cm_threadStamps[JOBS_MAX_THREADS];	// [thread][1 + MAX_SUB_BSP]
+static int			cm_threadStampThreads = 0;
+
+static bool CM_StampsMatch( const cmStamp_t *st, const clipMap_t *m ) {
+	return st->brushes == m->brushes && st->numBrushes == m->numBrushes + BOX_BRUSHES * JOBS_MAX_THREADS && st->numSurfaces == m->numSurfaces;
+}
+
+void CM_ThreadScratchFree( void ) {
+	for ( int t = 0; t < JOBS_MAX_THREADS; t++ ) {
+		if ( !cm_threadStamps[t] ) {
+			continue;
+		}
+		for ( int m = 0; m < 1 + MAX_SUB_BSP; m++ ) {
+			if ( cm_threadStamps[t][m].brush ) Z_Free( cm_threadStamps[t][m].brush );
+			if ( cm_threadStamps[t][m].surf ) Z_Free( cm_threadStamps[t][m].surf );
+		}
+		Z_Free( cm_threadStamps[t] );
+		cm_threadStamps[t] = NULL;
+	}
+	cm_threadStampThreads = 0;
+}
+
+void CM_ThreadScratchEnsure( int threads ) {
+	if ( threads > JOBS_MAX_THREADS ) {
+		threads = JOBS_MAX_THREADS;
+	}
+	bool ok = threads <= cm_threadStampThreads;
+	for ( int t = 1; ok && t < threads; t++ ) {
+		if ( !CM_StampsMatch( &cm_threadStamps[t][0], &cmg ) ) ok = false;
+		for ( int m = 0; ok && m < NumSubBSP; m++ ) {
+			if ( !CM_StampsMatch( &cm_threadStamps[t][1 + m], &SubBSP[m] ) ) ok = false;
+		}
+	}
+	if ( ok ) {
+		return;
+	}
+	CM_ThreadScratchFree();
+	for ( int t = 1; t < threads; t++ ) {
+		cm_threadStamps[t] = (cmStamp_t *)Z_Malloc( ( 1 + MAX_SUB_BSP ) * sizeof( cmStamp_t ), TAG_GENERAL, qtrue );
+		for ( int m = 0; m < 1 + NumSubBSP; m++ ) {
+			const clipMap_t *map = m ? &SubBSP[m - 1] : &cmg;
+			cmStamp_t *st = &cm_threadStamps[t][m];
+			st->brushes = map->brushes;
+			st->numBrushes = map->numBrushes + BOX_BRUSHES * JOBS_MAX_THREADS;
+			st->numSurfaces = map->numSurfaces;
+			st->brush = (int *)Z_Malloc( st->numBrushes * sizeof( int ), TAG_GENERAL, qtrue );
+			st->surf = (int *)Z_Malloc( ( st->numSurfaces + 1 ) * sizeof( int ), TAG_GENERAL, qtrue );
+		}
+	}
+	cm_threadStampThreads = threads;
+}
+
+cmStamp_t *CM_ThreadStamps( int thread ) {
+	return cm_threadStamps[thread];
+}
+
+/*
+==================
 CM_ClearMap
 ==================
 */
 void CM_ClearMap( void )
 {
 	int		i;
+
+	CM_ThreadScratchFree();
 
 	Com_Memset( &cmg, 0, sizeof( cmg ) );
 	CM_ClearLevelPatches();
@@ -876,7 +952,7 @@ cmodel_t	*CM_ClipHandleToModel( clipHandle_t handle, clipMap_t **clipMap ) {
 		{
 			*clipMap = &cmg;
 		}
-		return &box_model;
+		return &box_models[Com_JobsThreadIndex()];
 	}
 
 	count = cmg.numSubModels;
@@ -955,31 +1031,36 @@ can just be stored out and get a proper clipping hull structure.
 */
 void CM_InitBoxHull (void)
 {
+	for ( int t = 0; t < JOBS_MAX_THREADS; t++ ) {
 	int			i;
 	int			side;
 	cplane_t	*p;
 	cbrushside_t	*s;
+	cplane_t	*box_planes;
+	cbrush_t	*box_brush;
+	cmodel_t	&box_model = box_models[t];
 
-	box_planes = &cmg.planes[cmg.numPlanes];
+	box_planes = box_planesT[t] = &cmg.planes[cmg.numPlanes + t * BOX_PLANES];
 
-	box_brush = &cmg.brushes[cmg.numBrushes];
+	box_brush = box_brushT[t] = &cmg.brushes[cmg.numBrushes + t * BOX_BRUSHES];
 	box_brush->numsides = 6;
-	box_brush->sides = cmg.brushsides + cmg.numBrushSides;
+	box_brush->sides = cmg.brushsides + cmg.numBrushSides + t * BOX_SIDES;
 	box_brush->contents = CONTENTS_BODY;
 
+	memset( &box_model, 0, sizeof( box_model ) );
 	box_model.firstNode = -1;
 	box_model.leaf.numLeafBrushes = 1;
 //	box_model.leaf.firstLeafBrush = cmg.numBrushes;
-	box_model.leaf.firstLeafBrush = cmg.numLeafBrushes;
-	cmg.leafbrushes[cmg.numLeafBrushes] = cmg.numBrushes;
+	box_model.leaf.firstLeafBrush = cmg.numLeafBrushes + t * BOX_BRUSHES;
+	cmg.leafbrushes[cmg.numLeafBrushes + t * BOX_BRUSHES] = cmg.numBrushes + t * BOX_BRUSHES;
 
 	for (i=0 ; i<6 ; i++)
 	{
 		side = i&1;
 
 		// brush sides
-		s = &cmg.brushsides[cmg.numBrushSides+i];
-		s->plane = 	cmg.planes + (cmg.numPlanes+i*2+side);
+		s = &cmg.brushsides[cmg.numBrushSides + t * BOX_SIDES + i];
+		s->plane = 	cmg.planes + (cmg.numPlanes + t * BOX_PLANES + i*2+side);
 		s->shaderNum = cmg.numShaders;
 
 		// planes
@@ -997,6 +1078,7 @@ void CM_InitBoxHull (void)
 
 		SetPlaneSignbits( p );
 	}
+	}
 }
 
 /*
@@ -1009,6 +1091,10 @@ Capsules are handled differently though.
 ===================
 */
 clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule ) {
+	const int	t = Com_JobsThreadIndex();
+	cmodel_t	&box_model = box_models[t];
+	cplane_t	*box_planes = box_planesT[t];
+	cbrush_t	*box_brush = box_brushT[t];
 
 	VectorCopy( mins, box_model.mins );
 	VectorCopy( maxs, box_model.maxs );
@@ -1339,7 +1425,7 @@ is reached by the swept trace volume. Returns the count, or -1 when the
 caller should fall back to walking the whole leaf.
 ==================
 */
-int CM_AccelCollect( const clipMap_t *local, const cLeaf_t *leaf, const vec3_t mins, const vec3_t maxs, const cmSweep_t *sweep, int *out, int maxOut ) {
+int CM_AccelCollect( const clipMap_t *local, const cLeaf_t *leaf, const vec3_t mins, const vec3_t maxs, const cmSweep_t *sweep, int *out, int maxOut, uint64_t *nodeCount ) {
 	int		stack[64];
 	int		sp = 0;
 	int		n = 0;
@@ -1348,7 +1434,7 @@ int CM_AccelCollect( const clipMap_t *local, const cLeaf_t *leaf, const vec3_t m
 	while ( sp ) {
 		const cmAccelNode_t *node = &local->accelNodes[stack[--sp]];
 
-		com_prof.cmAccelNodes++;
+		( *nodeCount )++;
 
 		if ( mins[0] > node->maxs[0] || mins[1] > node->maxs[1] || mins[2] > node->maxs[2]
 			|| maxs[0] < node->mins[0] || maxs[1] < node->mins[1] || maxs[2] < node->mins[2] ) {

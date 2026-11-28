@@ -32,6 +32,12 @@ void		CM_ClearMap( void );
 clipHandle_t CM_InlineModel( int index );		// 0 = world, 1 + are bmodels
 clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule );
 
+// before a parallel loop that traces: per-thread collision scratch for `threads` threads (main
+// thread included) and the clip maps loaded now. Main thread only; allocates only when the map or
+// the thread count changed.
+void		CM_ThreadScratchEnsure( int threads );
+void		CM_ThreadScratchFree( void );
+
 void		CM_ModelBounds( clipHandle_t model, vec3_t mins, vec3_t maxs );
 
 int			CM_NumInlineModels( void );

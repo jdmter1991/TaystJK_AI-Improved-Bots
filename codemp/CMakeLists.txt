@@ -286,6 +286,8 @@ if(BuildMPEngine OR BuildMPDed)
         "${MPDir}/qcommon/net_http.cpp"
         "${MPDir}/qcommon/persistence.cpp"
 		"${MPDir}/qcommon/q_shared.cpp"
+		"${MPDir}/qcommon/q_jobs.cpp"
+		"${MPDir}/qcommon/q_jobs.h"
 		"${MPDir}/qcommon/qcommon.h"
 		"${MPDir}/qcommon/qfiles.h"
 		"${MPDir}/qcommon/RoffSystem.cpp"

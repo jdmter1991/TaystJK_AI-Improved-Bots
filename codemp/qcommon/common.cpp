@@ -28,6 +28,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "qcommon/cm_public.h"
 #include "qcommon/game_version.h"
 #include "qcommon/com_profile.h"
+#include "qcommon/q_jobs.h"
 #include "../server/NPCNav/navigator.h"
 #include "../shared/sys/sys_local.h"
 #if defined(_WIN32)
@@ -1516,6 +1517,8 @@ void Com_Init( char *commandLine ) {
 
 		Sys_SetProcessorAffinity();
 
+		Com_JobsInit();
+
 		// Pick a random port value
 		Com_RandomBytes( (byte*)&qport, sizeof(int) );
 		Netchan_Init( qport & 0xffff );	// pick a port value that should be nice and random
@@ -2077,6 +2080,7 @@ Com_Shutdown
 void MSG_shutdownHuffman();
 void Com_Shutdown (void)
 {
+	Com_JobsShutdown();
 	CM_ClearMap();
 
 	if (logfile) {

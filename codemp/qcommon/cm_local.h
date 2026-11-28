@@ -24,6 +24,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #pragma once
 
 #include "cm_polylib.h"
+#include "com_profile.h"
 #include "cm_public.h"
 #include "qcommon/qcommon.h"
 
@@ -199,7 +200,6 @@ typedef struct cmSweep_s {
 
 #define	CM_SWEEP_MARGIN		1.0f	// > SURFACE_CLIP_EPSILON; brushes are effectively that much larger
 
-extern	cmSweep_t	cm_sweep;
 
 // true when the swept volume can touch the box [mins,maxs]
 static inline bool CM_SweepTouchesBox( const cmSweep_t *sw, const float *mins, const float *maxs ) {
@@ -230,7 +230,7 @@ static inline bool CM_SweepTouchesBox( const cmSweep_t *sw, const float *mins, c
 }
 
 void	CM_BuildLeafAccel( clipMap_t &cm );
-int		CM_AccelCollect( const clipMap_t *local, const cLeaf_t *leaf, const vec3_t mins, const vec3_t maxs, const cmSweep_t *sweep, int *out, int maxOut );
+int		CM_AccelCollect( const clipMap_t *local, const cLeaf_t *leaf, const vec3_t mins, const vec3_t maxs, const cmSweep_t *sweep, int *out, int maxOut, uint64_t *nodeCount );
 
 // cm_test.c
 
@@ -241,6 +241,17 @@ typedef struct sphere_s {
 	float		halfheight;
 	vec3_t		offset;
 } sphere_t;
+
+// "already tested in this trace" stamps of one job thread for one clip map (the main thread uses
+// the checkcount fields in the brushes and patches themselves)
+typedef struct cmStamp_s {
+	int			count;
+	int			numBrushes;
+	int			numSurfaces;
+	int			*brush;
+	int			*surf;
+	const cbrush_t *brushes;	// what the arrays were made for
+} cmStamp_t;
 
 typedef struct traceWork_s { //rwwRMG - modified
 	vec3_t		start;
@@ -268,7 +279,63 @@ typedef struct traceWork_s { //rwwRMG - modified
 	bool			startout;
 	bool			getout;
 
+	// per-trace state that used to be global (so that job threads can trace at the same time)
+	int				thread;			// job thread index, 0 = main thread
+	cmStamp_t		*stamps;		// [1 + MAX_SUB_BSP] stamps of a job thread, NULL on the main thread
+	comProfCm_t		*prof;			// collision counters of this thread
+	int				accelActive;	// leaf walks may use the per-leaf brush hierarchy
+	cmSweep_t		sweep;			// moving volume for swept culling (accelerated path only)
 } traceWork_t;
+
+extern clipMap_t	SubBSP[MAX_SUB_BSP];
+
+static inline cmStamp_t *CM_StampFor( const traceWork_t *tw, const clipMap_t *local ) {
+	return tw->stamps ? &tw->stamps[ local == &cmg ? 0 : 1 + (int)( local - SubBSP ) ] : NULL;
+}
+
+// true when this brush was already tested in this trace; marks it tested otherwise
+static inline bool CM_BrushSeen( cmStamp_t *st, clipMap_t *local, int brushnum, cbrush_t *b ) {
+	if ( !st ) {
+		if ( b->checkcount == local->checkcount ) {
+			return true;
+		}
+		b->checkcount = local->checkcount;
+		return false;
+	}
+	if ( st->brush[brushnum] == st->count ) {
+		return true;
+	}
+	st->brush[brushnum] = st->count;
+	return false;
+}
+
+static inline bool CM_PatchSeen( cmStamp_t *st, clipMap_t *local, int surfnum, cPatch_t *patch ) {
+	if ( !st ) {
+		if ( patch->checkcount == local->checkcount ) {
+			return true;
+		}
+		patch->checkcount = local->checkcount;
+		return false;
+	}
+	if ( st->surf[surfnum] == st->count ) {
+		return true;
+	}
+	st->surf[surfnum] = st->count;
+	return false;
+}
+
+// starts a new "already tested" generation for this trace
+static inline void CM_NewCheck( traceWork_t *tw, clipMap_t *local ) {
+	cmStamp_t *st = CM_StampFor( tw, local );
+	if ( st ) {
+		st->count++;
+	} else {
+		local->checkcount++;
+	}
+}
+
+// job threads: stamps for the clip maps loaded now; NULL when CM_ThreadScratchEnsure did not run
+cmStamp_t	*CM_ThreadStamps( int thread );
 
 typedef struct leafList_s {
 	int		count;

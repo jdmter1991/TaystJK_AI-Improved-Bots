@@ -23,6 +23,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "server.h"
 #include "qcommon/com_profile.h"
+#include "qcommon/q_jobs.h"
 #include "botlib/botlib.h"
 #include "qcommon/stringed_ingame.h"
 #include "qcommon/RoffSystem.h"
@@ -2858,6 +2859,46 @@ void SV_InitGame( qboolean restart ) {
 	Cvar_Set("sv_legacyGameAPI", gvm ? (gvm->isLegacy ? "1" : "0") : "");
 }
 
+// ---- job system for the game module (gameImport_t::JobsParallelFor) ----
+static int SV_GameJobsThreads( void ) {
+	return Com_JobsThreads();
+}
+
+// counters of the job threads into com_prof, in thread order
+static void SV_JobsMergeProfile( int threads ) {
+	const int ph = com_prof.phase;
+	for ( int t = 1; t < threads && t < JOBS_MAX_THREADS; t++ ) {
+		comProfThread_t *pt = &com_profThread[t];
+		com_prof.svTraces[ph] += pt->svTraces;
+		com_prof.svTraceNs[ph] += pt->svTraceNs;
+		com_prof.svWorldTraceNs[ph] += pt->svWorldTraceNs;
+		com_prof.svPointContents[ph] += pt->svPointContents;
+		com_prof.cm.leafVisits += pt->cm.leafVisits;
+		com_prof.cm.leafBrushesWalked += pt->cm.leafBrushesWalked;
+		com_prof.cm.brushesTested += pt->cm.brushesTested;
+		com_prof.cm.accelNodes += pt->cm.accelNodes;
+		memset( pt, 0, sizeof( *pt ) );
+	}
+}
+
+static void SV_GameJobsParallelFor( int count, void ( *fn )( void *ctx, int index, int thread ), void *ctx ) {
+	const int threads = Com_JobsThreads();
+	if ( threads > 1 && count > 1 ) {
+		CM_ThreadScratchEnsure( threads );
+	}
+	{
+		ComProfPart profPart( CPP_JOBS );
+		Com_JobsParallelFor( count, fn, ctx );
+	}
+	if ( threads > 1 ) {
+		SV_JobsMergeProfile( threads );
+		const int g2 = SV_JobG2TracesTake();
+		if ( g2 ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %d Ghoul2 traces asked for from job threads were left out\n", g2 );
+		}
+	}
+}
+
 void SV_BindGame( void ) {
 	static gameImport_t gi;
 	gameExport_t		*ret;
@@ -3177,6 +3218,10 @@ void SV_BindGame( void ) {
 		gi.G2API_CleanEntAttachments			= SV_G2API_CleanEntAttachments;
 		gi.G2API_OverrideServer					= SV_G2API_OverrideServer;
 		gi.G2API_GetSurfaceName					= SV_G2API_GetSurfaceName;
+		gi.JobsThreads							= SV_GameJobsThreads;
+		gi.JobsParallelFor						= SV_GameJobsParallelFor;
+		gi.WorldGeneration						= SV_WorldGeneration;
+		Cvar_Get( "sv_gameJobsApi", "1", CVAR_ROM, "1: this engine gives the game module the job system (JobsParallelFor, WorldGeneration)" );
 
 		GetGameAPI = (GetGameAPI_t)gvm->GetModuleAPI;
 		ret = GetGameAPI( GAME_API_VERSION, &gi );

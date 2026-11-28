@@ -33,6 +33,14 @@ enum comProfPhase_e {
 	CPROF_NUM_PHASES
 };
 
+// collision-model work counters
+typedef struct comProfCm_s {
+	uint64_t	leafVisits;			// leaves handed to CM_TraceThroughLeaf / CM_TestInLeaf
+	uint64_t	leafBrushesWalked;	// leaf-brush references iterated
+	uint64_t	brushesTested;		// brushes that passed the bounds reject (plane tests run)
+	uint64_t	accelNodes;			// accelerator nodes visited (0 when the accelerator is off)
+} comProfCm_t;
+
 typedef struct comProfile_s {
 	int			enabled;
 	int			phase;
@@ -44,11 +52,8 @@ typedef struct comProfile_s {
 	uint64_t	svPointContents[CPROF_NUM_PHASES];
 	uint64_t	svPointContentsNs[CPROF_NUM_PHASES];
 
-	// collision-model work (all callers)
-	uint64_t	cmLeafVisits;			// leaves handed to CM_TraceThroughLeaf / CM_TestInLeaf
-	uint64_t	cmLeafBrushesWalked;	// leaf-brush references iterated
-	uint64_t	cmBrushesTested;		// brushes that passed the bounds reject (plane tests run)
-	uint64_t	cmAccelNodes;			// accelerator nodes visited (0 when the accelerator is off)
+	// collision-model work (all callers on the main thread; the job threads count in comProfThread_t)
+	comProfCm_t	cm;
 
 	// slowest single SV_Trace since the server last cleared it (once per frame)
 	uint64_t	worstTraceNs;
@@ -65,6 +70,18 @@ typedef struct comProfile_s {
 } comProfile_t;
 
 extern comProfile_t com_prof;
+
+// counters of the job threads (index = job thread, 0 unused); merged into com_prof by the code that
+// started the parallel loop, once the loop has finished
+typedef struct comProfThread_s {
+	comProfCm_t	cm;
+	uint64_t	svTraces, svTraceNs, svWorldTraceNs;
+	uint64_t	svPointContents;
+} comProfThread_t;
+extern comProfThread_t com_profThread[16];	// JOBS_MAX_THREADS
+
+// the collision counters of the calling thread
+comProfCm_t *CM_ProfCounters( void );
 
 static inline uint64_t Com_ProfNowNs( void ) {
 	return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
